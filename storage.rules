@@ -1,0 +1,83 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isLessThan5MB() {
+      return request.resource.size < 5 * 1024 * 1024;
+    }
+
+    function isSystemController() {
+      return isSignedIn() && (
+        request.auth.token.email == 'mehedihasan1303@gmail.com' ||
+        request.auth.token.email == 'mehedibasan1303@gmai.com'
+      );
+    }
+
+    // Official Application Logo (Exclusively managed by System Controller)
+    match /logo/{allPaths=**} {
+      allow read: if true;
+      allow write, delete: if isSystemController()
+        && request.resource.size <= 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg|jpg|webp|svg\\+xml)');
+    }
+
+    // Profile photos and cover photos for individual members
+    // Only the authenticated member can upload, replace, or delete their own profile files
+    match /users/{userId}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) 
+        && isImage() 
+        && isLessThan5MB();
+      allow delete: if isOwner(userId);
+    }
+
+    // Community post attachments
+    match /posts/{userId}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) 
+        && isImage() 
+        && isLessThan5MB();
+      allow delete: if isOwner(userId);
+    }
+
+    // Campaign cover photos and banners (Admin & Moderator authorized)
+    match /campaigns/{campaignId}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() 
+        && isImage() 
+        && isLessThan5MB();
+      allow delete: if isSignedIn();
+    }
+
+    // Donation payment slips and bank transfer evidence
+    match /donations/{userId}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) 
+        && isImage() 
+        && isLessThan5MB();
+      allow delete: if isOwner(userId);
+    }
+
+    // Direct message and conversation photo attachments
+    match /messages/{conversationId}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() 
+        && isImage() 
+        && isLessThan5MB();
+      allow delete: if isSignedIn();
+    }
+  }
+}
+

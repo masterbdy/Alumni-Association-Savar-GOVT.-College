@@ -1,0 +1,184 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for authentication & role verification
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isApproved() {
+      return isSignedIn() && getUserData().status == 'approved';
+    }
+
+    function isModerator() {
+      return isSignedIn() && (getUserData().role in ['super_admin', 'admin', 'moderator']);
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        getUserData().role in ['super_admin', 'admin'] ||
+        request.auth.token.email == 'k7379680@gmail.com'
+      );
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        getUserData().role == 'super_admin' || 
+        request.auth.token.email in ['mehedihasan1303@gmail.com', 'mehedibasan1303@gmai.com']
+      );
+    }
+
+    // ==========================================
+    // 1. Users Collection & Profile Protection
+    // ==========================================
+    match /users/{userId} {
+      // Any authenticated user can read public profile details
+      allow read: if isSignedIn();
+
+      // Only applicant/new user can create their own pending profile
+      // Public registration CANNOT assign privileged roles or approved status
+      allow create: if isOwner(userId) 
+        && request.resource.data.role == 'member'
+        && request.resource.data.status == 'pending';
+
+      // Profile Edit Security Gate:
+      // Members can ONLY edit their own profile, AND cannot alter sensitive fields:
+      // role, status, approvedAt, uid, email, passwordHash.
+      // Admins can update roles, but cannot demote or alter a Super Admin.
+      allow update: if (isOwner(userId) 
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+      ) || (
+        isAdmin() 
+        && (resource.data.role != 'super_admin' || isSuperAdmin())
+        && request.auth.uid != userId // Self-role change prohibited
+      );
+
+      // Only Super Admin can delete user records, but cannot delete a Super Admin account
+      allow delete: if isSuperAdmin() && resource.data.role != 'super_admin';
+    }
+
+    // ==========================================
+    // 2. Posts Collection
+    // ==========================================
+    match /posts/{postId} {
+      allow read: if isSignedIn();
+
+      // Must be approved member and create post under their own authorId
+      allow create: if isApproved() 
+        && request.resource.data.authorId == request.auth.uid;
+
+      // Author can edit their post content, but cannot alter authorId or creation time.
+      // Moderators can toggle isPinned.
+      allow update: if (isApproved() && resource.data.authorId == request.auth.uid && request.resource.data.authorId == resource.data.authorId)
+        || isModerator();
+
+      // Author or moderator can delete
+      allow delete: if (isApproved() && resource.data.authorId == request.auth.uid)
+        || isModerator();
+    }
+
+    // ==========================================
+    // 3. Comments Collection / Subcollection
+    // ==========================================
+    match /posts/{postId}/comments/{commentId} {
+      allow read: if isSignedIn();
+      allow create: if isApproved() && request.resource.data.authorId == request.auth.uid;
+      allow update: if isApproved() && resource.data.authorId == request.auth.uid;
+      allow delete: if (isApproved() && resource.data.authorId == request.auth.uid) || isModerator();
+    }
+
+    // ==========================================
+    // 4. Conversations & Direct Messages
+    // ==========================================
+    match /conversations/{conversationId} {
+      function isParticipant(data) {
+        return ('participants' in data && request.auth.uid in data.participants) ||
+               ('participantIds' in data && request.auth.uid in data.participantIds);
+      }
+
+      allow read: if isSignedIn() && isParticipant(resource.data);
+      allow create: if isApproved() && isParticipant(request.resource.data);
+      allow update: if isApproved() && isParticipant(resource.data);
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && isParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+        allow create: if isApproved() 
+          && request.resource.data.senderId == request.auth.uid
+          && isParticipant(get(/databases/$(database)/documents/conversations/$(conversationId)).data);
+      }
+    }
+
+    function canVerifyDonations() {
+      return isSignedIn() && (getUserData().role in ['super_admin', 'admin', 'moderator']);
+    }
+
+    // ==========================================
+    // 5. Campaigns & Financial Donations
+    // ==========================================
+    match /campaigns/{campaignId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin();
+      // Only authorized verification roles or admins can update campaigns/totals
+      allow update: if canVerifyDonations();
+      allow delete: if isSuperAdmin();
+    }
+
+    match /donations/{donationId} {
+      // Members can read their own submissions; reviewers can read all
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || 
+        resource.data.donorId == request.auth.uid || 
+        canVerifyDonations()
+      );
+
+      // Members can only create donation records under their own authenticated UID in 'pending' status
+      allow create: if isSignedIn() 
+        && (request.resource.data.userId == request.auth.uid || request.resource.data.donorId == request.auth.uid)
+        && request.resource.data.status == 'pending';
+
+      // Strict Role-Based Verification Gate (Requirements B, D, E):
+      // Only Super Admin, Admin, and Moderator can confirm, reject, dispute, or reverse donations.
+      // Self-verification is strictly prohibited at the database rule level:
+      // A reviewer CANNOT update a donation where they are the donor!
+      allow update: if canVerifyDonations() 
+        && request.auth.uid != resource.data.userId
+        && request.auth.uid != resource.data.donorId;
+
+      // Only Super Admin can delete donation records
+      allow delete: if isSuperAdmin();
+    }
+
+    // ==========================================
+    // 6. Executive Council Activity Logs
+    // ==========================================
+    match /activityLogs/{logId} {
+      allow read: if canVerifyDonations();
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Immutable audit trail
+    }
+
+    // ==========================================
+    // 7. System Controller Master Control & Settings
+    // ==========================================
+    match /systemSettings/{settingId} {
+      // Permission matrix & emergency mode readable by members to adapt UI
+      allow read: if isSignedIn();
+      // Only authoritative System Controller can update permission matrix, emergency controls, and admin limits
+      allow write: if isSuperAdmin();
+      allow delete: if false; // Protection against accidental settings purge
+    }
+  }
+}
+

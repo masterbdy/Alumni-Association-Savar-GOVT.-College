@@ -1,0 +1,57 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "app_logo": {
+      ".read": true,
+      ".write": "auth != null && (auth.token.email === 'mehedihasan1303@gmail.com' || auth.token.email === 'mehedibasan1303@gmai.com')"
+    },
+
+    "users": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && (auth.uid === $uid || auth.token.email === 'mehedihasan1303@gmail.com' || auth.token.email === 'mehedibasan1303@gmai.com')",
+        "role": {
+          ".write": "auth != null && (auth.token.email === 'mehedihasan1303@gmail.com' || auth.token.email === 'mehedibasan1303@gmai.com')"
+        }
+      }
+    },
+
+    "posts": {
+      ".read": "auth != null",
+      "$post_id": {
+        ".write": "auth != null && (!data.exists() || data.child('authorId').val() === auth.uid || root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'super_admin')"
+      }
+    },
+
+    "donations": {
+      ".read": "auth != null",
+      "$donation_id": {
+        ".write": "auth != null && (!data.exists() || root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'super_admin')"
+      }
+    },
+
+    "activity_logs": {
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'super_admin')",
+      "$log_id": {
+        ".write": "auth != null"
+      }
+    },
+
+    "emergency_controls": {
+      ".read": "auth != null",
+      ".write": "auth != null && (auth.token.email === 'mehedihasan1303@gmail.com' || auth.token.email === 'mehedibasan1303@gmai.com')"
+    },
+
+    "admin_limits": {
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'admin' || root.child('users').child(auth.uid).child('role').val() === 'super_admin')",
+      ".write": "auth != null && (auth.token.email === 'mehedihasan1303@gmail.com' || auth.token.email === 'mehedibasan1303@gmai.com')"
+    },
+
+    "otps": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}

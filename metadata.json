@@ -1,0 +1,8 @@
+{
+  "name": "Remix Nexus Club - Premium Private Community",
+  "description": "Exclusive private community platform with approved member access, social feeds, direct and group messaging, verified bKash/Nagad donations, and role-based administration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
