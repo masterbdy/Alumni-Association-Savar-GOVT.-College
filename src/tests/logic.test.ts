@@ -26,12 +26,15 @@ import {
   getStoredFirebaseConfig,
   testFirebaseConnection,
   parseRawFirebaseConfig,
-  formatRawFirebaseConfig
+  formatRawFirebaseConfig,
+  getStoredPublicSmtpConfig,
+  storePublicSmtpConfig
 } from '../services/systemDiagnosticsService';
 import {
   updateSmtpConfig,
   executeSmtpTest,
-  getPublicSmtpConfig
+  getPublicSmtpConfig,
+  isMaskOrPlaceholder
 } from '../services/smtpServerService';
 
 import { 
@@ -3641,3 +3644,155 @@ test('ADMIN-RBAC-01: President (k7379680@gmail.com) is excluded from Backup & Re
     assert.equal(isAccessibleBySuperAdmin, true, `Tab ${tab} must be accessible to System Controller`);
   });
 });
+
+test('SMTP-PERSIST-01: Bullet string or masked placeholder is rejected and cannot overwrite password', () => {
+  const sysCtrlEmail = 'mehedihasan1303@gmail.com';
+
+  assert.equal(isMaskOrPlaceholder('••••••••••••••••'), true);
+  assert.equal(isMaskOrPlaceholder('●●●●●●●●'), true);
+  assert.equal(isMaskOrPlaceholder('********'), true);
+  assert.equal(isMaskOrPlaceholder('myrealpassword123'), false);
+
+  // Attempting to submit bullet string must be strictly rejected
+  const bulletSubmitRes = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'mehedihasan1303@gmail.com',
+    senderDisplayName: 'Department of Management',
+    appPassword: '••••••••••••••••'
+  }, sysCtrlEmail);
+
+  assert.equal(bulletSubmitRes.success, false);
+  assert.match(bulletSubmitRes.error || '', /Masked placeholder characters/);
+});
+
+test('SMTP-PERSIST-02: Updating Gmail address without providing password retains existing configured password', () => {
+  const sysCtrlEmail = 'mehedihasan1303@gmail.com';
+
+  // 1. Establish valid credentials with real 16-character password
+  const initialSave = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'alumni.mgmt.sgc@gmail.com',
+    senderDisplayName: 'Department of Management, Savar Govt. College',
+    appPassword: 'abcd efgh ijkl mnop'
+  }, sysCtrlEmail);
+
+  assert.equal(initialSave.success, true);
+  assert.equal(initialSave.config?.isPasswordConfigured, true);
+  assert.equal(initialSave.config?.senderEmail, 'alumni.mgmt.sgc@gmail.com');
+
+  // 2. Update ONLY the sender Gmail address without sending any password
+  const emailUpdateOnly = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'official.alumni.sgc@gmail.com',
+    senderDisplayName: 'Department of Management, Savar Govt. College'
+  }, sysCtrlEmail);
+
+  assert.equal(emailUpdateOnly.success, true);
+  assert.equal(emailUpdateOnly.config?.senderEmail, 'official.alumni.sgc@gmail.com');
+  // Password MUST remain configured!
+  assert.equal(emailUpdateOnly.config?.isPasswordConfigured, true, 'Existing Google App Password must not be erased when updating email address');
+
+  // 3. Update with empty string password also retains existing password
+  const emptyPassUpdate = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'official.alumni.sgc@gmail.com',
+    senderDisplayName: 'Department of Management, Savar Govt. College',
+    appPassword: ''
+  }, sysCtrlEmail);
+
+  assert.equal(emptyPassUpdate.success, true);
+  assert.equal(emptyPassUpdate.config?.isPasswordConfigured, true, 'Blank password field must retain existing password');
+});
+
+test('SMTP-PERSIST-03: Client public cache preserves Gmail address across reload without exposing password', () => {
+  const mockPublicConfig = {
+    service: 'gmail' as const,
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL' as const,
+    senderEmail: 'sgc.management.alumni@gmail.com',
+    senderDisplayName: 'Department of Management',
+    replyToEmail: 'support@alumni.org',
+    isPasswordConfigured: true,
+    lastTestStatus: 'success' as const
+  };
+
+  // Store in client public cache
+  storePublicSmtpConfig(mockPublicConfig);
+
+  // Retrieve as simulated page reload / navigation return
+  const hydrated = getStoredPublicSmtpConfig();
+  assert.equal(hydrated.senderEmail, 'sgc.management.alumni@gmail.com', 'Gmail address must remain saved after reload/navigation');
+  assert.equal(hydrated.isPasswordConfigured, true);
+  assert.equal(hydrated.host, 'smtp.gmail.com');
+  assert.equal(hydrated.port, 465);
+
+  // Ensure password is NEVER cached in localStorage
+  const rawStorage = localStorage.getItem('nexus_smtp_public_meta') || '';
+  assert.equal(rawStorage.includes('appPassword'), false, 'Password field must never exist in client storage');
+  assert.equal(rawStorage.includes('abcd'), false);
+});
+
+test('SMTP-PERSIST-04: Short passwords (< 8 chars) are rejected; valid 16-character passwords with spaces are sanitized and saved', () => {
+  const sysCtrlEmail = 'mehedihasan1303@gmail.com';
+
+  const shortRes = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'test@gmail.com',
+    senderDisplayName: 'Test',
+    appPassword: 'abc'
+  }, sysCtrlEmail);
+
+  assert.equal(shortRes.success, false);
+  assert.match(shortRes.error || '', /too short/i);
+
+  const validRes = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'mehedihasan1303@gmail.com',
+    senderDisplayName: 'Department of Management',
+    appPassword: 'wxyz efgh ijkl mnop'
+  }, sysCtrlEmail);
+
+  assert.equal(validRes.success, true);
+  assert.equal(validRes.config?.isPasswordConfigured, true);
+});
+
+test('SMTP-PERSIST-05: Non-controller cannot inspect or update SMTP configuration', () => {
+  const presidentEmail = 'k7379680@gmail.com';
+  const memberEmail = 'rafiq@example.com';
+
+  const unauthorizedUpdate = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'hacker@gmail.com',
+    senderDisplayName: 'Hacker'
+  }, presidentEmail);
+
+  assert.equal(unauthorizedUpdate.success, false);
+  assert.match(unauthorizedUpdate.error || '', /Security Violation/);
+
+  const memberUpdate = updateSmtpConfig({
+    host: 'smtp.gmail.com',
+    port: 465,
+    securityMode: 'SSL',
+    senderEmail: 'hacker@gmail.com',
+    senderDisplayName: 'Hacker'
+  }, memberEmail);
+
+  assert.equal(memberUpdate.success, false);
+  assert.match(memberUpdate.error || '', /Security Violation/);
+});
+

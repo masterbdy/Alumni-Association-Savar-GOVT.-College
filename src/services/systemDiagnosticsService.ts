@@ -498,6 +498,83 @@ export async function runServiceDiagnostics(): Promise<ServiceHealthCheckResult[
 // ==========================================
 // Client-Side SMTP Communication Methods
 // ==========================================
+// Client-Side SMTP Communication Methods with Safe Public Metadata Cache
+// ==========================================
+
+const SMTP_PUBLIC_CACHE_KEY = 'nexus_smtp_public_meta';
+
+export const DEFAULT_PUBLIC_SMTP_CONFIG: SmtpConfigPublic = {
+  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  securityMode: 'SSL',
+  senderEmail: 'mehedihasan1303@gmail.com',
+  senderDisplayName: 'Department Of Management, Savar Govt. College',
+  replyToEmail: '',
+  isPasswordConfigured: false,
+  lastTestStatus: 'untested'
+};
+
+/**
+ * Retrieves cached non-sensitive public SMTP settings.
+ * Ensures the UI never flashes empty fields during navigation or reload.
+ * NEVER stores or returns an app password.
+ */
+export function getStoredPublicSmtpConfig(): SmtpConfigPublic {
+  try {
+    const raw = localStorage.getItem(SMTP_PUBLIC_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          service: 'gmail',
+          host: parsed.host || 'smtp.gmail.com',
+          port: Number(parsed.port) || 465,
+          securityMode: parsed.securityMode === 'STARTTLS' ? 'STARTTLS' : 'SSL',
+          senderEmail: parsed.senderEmail || '',
+          senderDisplayName: parsed.senderDisplayName || 'Department Of Management, Savar Govt. College',
+          replyToEmail: parsed.replyToEmail || '',
+          isPasswordConfigured: Boolean(parsed.isPasswordConfigured),
+          persistedLocation: parsed.persistedLocation,
+          envConfigured: parsed.envConfigured,
+          persistenceMessage: parsed.persistenceMessage,
+          lastTestStatus: parsed.lastTestStatus || 'untested',
+          lastTestTimestamp: parsed.lastTestTimestamp,
+          lastTestError: parsed.lastTestError,
+          lastTestLatencyMs: parsed.lastTestLatencyMs
+        };
+      }
+    }
+  } catch {}
+  return DEFAULT_PUBLIC_SMTP_CONFIG;
+}
+
+/**
+ * Persists public non-sensitive SMTP settings to localStorage.
+ * Password is intentionally excluded.
+ */
+export function storePublicSmtpConfig(config: SmtpConfigPublic): void {
+  try {
+    const safeData: SmtpConfigPublic = {
+      service: 'gmail',
+      host: config.host || 'smtp.gmail.com',
+      port: config.port || 465,
+      securityMode: config.securityMode || 'SSL',
+      senderEmail: config.senderEmail || '',
+      senderDisplayName: config.senderDisplayName || 'Department Of Management, Savar Govt. College',
+      replyToEmail: config.replyToEmail || '',
+      isPasswordConfigured: Boolean(config.isPasswordConfigured),
+      persistedLocation: config.persistedLocation,
+      envConfigured: config.envConfigured,
+      persistenceMessage: config.persistenceMessage,
+      lastTestStatus: config.lastTestStatus || 'untested',
+      lastTestTimestamp: config.lastTestTimestamp,
+      lastTestError: config.lastTestError,
+      lastTestLatencyMs: config.lastTestLatencyMs
+    };
+    localStorage.setItem(SMTP_PUBLIC_CACHE_KEY, JSON.stringify(safeData));
+  } catch {}
+}
 
 export async function fetchPublicSmtpConfig(callerEmail: string): Promise<{ success: boolean; config?: SmtpConfigPublic; error?: string }> {
   try {
@@ -506,16 +583,26 @@ export async function fetchPublicSmtpConfig(callerEmail: string): Promise<{ succ
         'x-caller-email': callerEmail
       }
     });
-    return await resp.json();
+    const data = await resp.json();
+    if (data.success && data.config) {
+      storePublicSmtpConfig(data.config);
+    }
+    return data;
   } catch (err: any) {
-    return { success: false, error: err.message || 'Network error fetching SMTP config' };
+    // Return cached config as graceful fallback if server request fails
+    const cached = getStoredPublicSmtpConfig();
+    return { 
+      success: true, 
+      config: cached, 
+      error: `Offline cache active (${err.message || 'Server API unreachable'})` 
+    };
   }
 }
 
 export async function saveSmtpConfig(
   payload: SmtpConfigSavePayload,
   callerEmail: string
-): Promise<{ success: boolean; config?: SmtpConfigPublic; error?: string }> {
+): Promise<{ success: boolean; config?: SmtpConfigPublic; message?: string; error?: string }> {
   try {
     const resp = await fetch('/api/smtp/config', {
       method: 'POST',
@@ -525,7 +612,11 @@ export async function saveSmtpConfig(
       },
       body: JSON.stringify(payload)
     });
-    return await resp.json();
+    const data = await resp.json();
+    if (data.success && data.config) {
+      storePublicSmtpConfig(data.config);
+    }
+    return data;
   } catch (err: any) {
     return { success: false, error: err.message || 'Network error updating SMTP config' };
   }

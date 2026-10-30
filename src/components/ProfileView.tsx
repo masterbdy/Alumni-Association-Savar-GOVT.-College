@@ -927,7 +927,6 @@ export const ProfileView: React.FC = () => {
                     required
                     value={currentPassword}
                     onChange={e => setCurrentPassword(e.target.value)}
-                    placeholder="Enter current password (demo: nexus2026)"
                     className="w-full bg-[#FAFAFA] border border-[#DBDBDB] rounded-xl px-3.5 py-2.5 text-xs text-[#262626] pr-10 focus:outline-none focus:border-[#DD2A7B] focus:bg-white"
                   />
                   <button

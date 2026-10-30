@@ -577,6 +577,9 @@ export interface SmtpConfigPublic {
   senderDisplayName: string;
   replyToEmail?: string;
   isPasswordConfigured: boolean;
+  persistedLocation?: 'primary_file' | 'fallback_file' | 'memory_only';
+  envConfigured?: boolean;
+  persistenceMessage?: string;
   lastTestStatus: 'success' | 'failed' | 'untested';
   lastTestTimestamp?: string;
   lastTestError?: string;

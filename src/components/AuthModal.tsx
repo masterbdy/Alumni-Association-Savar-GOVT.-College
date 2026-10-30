@@ -428,7 +428,6 @@ export const AuthModal: React.FC = () => {
                           required
                           value={forgotEmail}
                           onChange={(e) => setForgotEmail(e.target.value)}
-                          placeholder="your.email@example.com"
                           className="w-full pl-10 pr-3.5 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                         />
                       </div>
@@ -457,7 +456,6 @@ export const AuthModal: React.FC = () => {
                             required
                             value={forgotOtpCode}
                             onChange={(e) => setForgotOtpCode(e.target.value.replace(/\D/g, ''))}
-                            placeholder="Enter 6-digit OTP"
                             className="w-full pl-10 pr-3.5 py-2.5 rounded-2xl neu-inset text-xs tracking-widest font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                           />
                         </div>
@@ -474,7 +472,6 @@ export const AuthModal: React.FC = () => {
                             required
                             value={forgotNewPassword}
                             onChange={(e) => setForgotNewPassword(e.target.value)}
-                            placeholder="Minimum 6 characters"
                             className="w-full pl-10 pr-10 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                           />
                           <button
@@ -498,7 +495,6 @@ export const AuthModal: React.FC = () => {
                             required
                             value={forgotConfirmPassword}
                             onChange={(e) => setForgotConfirmPassword(e.target.value)}
-                            placeholder="Re-enter new password"
                             className="w-full pl-10 pr-3.5 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                           />
                         </div>
@@ -551,8 +547,7 @@ export const AuthModal: React.FC = () => {
                         required
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        placeholder="your.email@example.com"
-                        className="w-full pl-10 pr-3.5 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
+                        className="w-full pl-10 pr-3.5 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
                       />
                     </div>
                   </div>
@@ -582,8 +577,7 @@ export const AuthModal: React.FC = () => {
                         required
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full pl-10 pr-10 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
+                        className="w-full pl-10 pr-10 py-2.5 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30 transition-all"
                       />
                       <button
                         type="button"
@@ -741,8 +735,7 @@ export const AuthModal: React.FC = () => {
                       required
                       value={regName}
                       onChange={(e) => setRegName(e.target.value)}
-                      placeholder="e.g. Mohammad Rafiqul Islam"
-                      className="w-full pl-9 pr-3.5 py-2 rounded-2xl neu-inset text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                      className="w-full pl-9 pr-3.5 py-2 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                     />
                   </div>
                 </div>
@@ -764,7 +757,6 @@ export const AuthModal: React.FC = () => {
                           setRegEmail(e.target.value);
                           setIsRegEmailVerified(false);
                         }}
-                        placeholder="your.email@example.com"
                         className="w-full pl-9 pr-3.5 py-2 rounded-2xl neu-inset text-xs text-slate-800 disabled:opacity-75 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                       />
                     </div>
@@ -792,7 +784,6 @@ export const AuthModal: React.FC = () => {
                         maxLength={6}
                         value={regOtpCode}
                         onChange={(e) => setRegOtpCode(e.target.value.replace(/\D/g, ''))}
-                        placeholder="6-digit OTP"
                         className="flex-1 px-3 py-1.5 rounded-xl neu-inset text-xs font-mono tracking-widest text-center text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                       />
                       <button
@@ -825,8 +816,7 @@ export const AuthModal: React.FC = () => {
                         required
                         value={regPassword}
                         onChange={(e) => setRegPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full pl-8 pr-7 py-2 rounded-2xl neu-inset text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                        className="w-full pl-8 pr-7 py-2 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                       />
                       <button
                         type="button"
@@ -849,8 +839,7 @@ export const AuthModal: React.FC = () => {
                         required
                         value={regConfirmPassword}
                         onChange={(e) => setRegConfirmPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full pl-8 pr-7 py-2 rounded-2xl neu-inset text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                        className="w-full pl-8 pr-7 py-2 rounded-2xl neu-inset text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
                       />
                       <button
                         type="button"

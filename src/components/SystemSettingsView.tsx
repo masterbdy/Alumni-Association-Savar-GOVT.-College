@@ -22,6 +22,7 @@ import {
   fetchPublicSmtpConfig,
   saveSmtpConfig,
   triggerSmtpTest,
+  getStoredPublicSmtpConfig,
   testFirebaseConnection,
   parseRawFirebaseConfig,
   formatRawFirebaseConfig
@@ -114,25 +115,17 @@ export const SystemSettingsView: React.FC = () => {
   // ==========================================
   // Card B: Email / SMTP Configuration State
   // ==========================================
-  const [smtpConfig, setSmtpConfig] = useState<SmtpConfigPublic>({
-    service: 'gmail',
-    host: 'smtp.gmail.com',
-    port: 465,
-    securityMode: 'SSL',
-    senderEmail: '',
-    senderDisplayName: 'Department Of Management, Savar Govt. College',
-    replyToEmail: '',
-    isPasswordConfigured: false,
-    lastTestStatus: 'untested'
-  });
-  const [smtpHost, setSmtpHost] = useState('smtp.gmail.com');
-  const [smtpPort, setSmtpPort] = useState<number>(465);
-  const [smtpSecurityMode, setSmtpSecurityMode] = useState<SmtpSecurityMode>('SSL');
-  const [smtpSenderEmail, setSmtpSenderEmail] = useState('');
+  const initialSmtp = getStoredPublicSmtpConfig();
+  const [smtpConfig, setSmtpConfig] = useState<SmtpConfigPublic>(initialSmtp);
+  const [smtpHost, setSmtpHost] = useState(initialSmtp.host || 'smtp.gmail.com');
+  const [smtpPort, setSmtpPort] = useState<number>(initialSmtp.port || 465);
+  const [smtpSecurityMode, setSmtpSecurityMode] = useState<SmtpSecurityMode>(initialSmtp.securityMode || 'SSL');
+  const [smtpSenderEmail, setSmtpSenderEmail] = useState(initialSmtp.senderEmail || 'mehedihasan1303@gmail.com');
   const [smtpAppPassword, setSmtpAppPassword] = useState('');
   const [showAppPassword, setShowAppPassword] = useState(false);
-  const [smtpDisplayName, setSmtpDisplayName] = useState('Department Of Management, Savar Govt. College');
-  const [smtpReplyTo, setSmtpReplyTo] = useState('');
+  const [isReplacingPassword, setIsReplacingPassword] = useState(false);
+  const [smtpDisplayName, setSmtpDisplayName] = useState(initialSmtp.senderDisplayName || 'Department Of Management, Savar Govt. College');
+  const [smtpReplyTo, setSmtpReplyTo] = useState(initialSmtp.replyToEmail || '');
   const [smtpTestRecipient, setSmtpTestRecipient] = useState(currentUser?.email || 'mehedihasan1303@gmail.com');
 
   const [isLoadingSmtp, setIsLoadingSmtp] = useState(false);
@@ -353,24 +346,53 @@ export const SystemSettingsView: React.FC = () => {
   const handleSaveSmtp = async () => {
     setIsSavingSmtp(true);
     setSmtpFeedback(null);
+
+    // Validate Sender Email
+    const cleanedEmail = smtpSenderEmail.trim().toLowerCase();
+    if (!cleanedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanedEmail)) {
+      setIsSavingSmtp(false);
+      setIsConfirmingSmtpSave(false);
+      setSmtpFeedback({ success: false, message: 'Please enter a valid Sender Gmail address before saving.' });
+      return;
+    }
+
+    // Validate Password if explicit replacement was initiated
+    if (isReplacingPassword) {
+      const trimmedPass = smtpAppPassword.trim();
+      if (!trimmedPass) {
+        setIsSavingSmtp(false);
+        setIsConfirmingSmtpSave(false);
+        setSmtpFeedback({ success: false, message: 'Please enter the new 16-character Google App Password, or click "Keep Existing" to retain current password.' });
+        return;
+      }
+      if (/[•●·◦*]/.test(trimmedPass)) {
+        setIsSavingSmtp(false);
+        setIsConfirmingSmtpSave(false);
+        setSmtpFeedback({ success: false, message: 'Masked placeholder characters (bullets/asterisks) are not accepted as an App Password.' });
+        return;
+      }
+    }
+
     try {
       const res = await saveSmtpConfig({
         host: smtpHost.trim(),
         port: Number(smtpPort),
         securityMode: smtpSecurityMode,
-        senderEmail: smtpSenderEmail.trim(),
+        senderEmail: cleanedEmail,
         senderDisplayName: smtpDisplayName.trim(),
         replyToEmail: smtpReplyTo.trim(),
-        appPassword: smtpAppPassword.trim() ? smtpAppPassword : undefined
-      }, currentUser?.email || '');
+        // Only submit new password if explicit replacement occurred
+        appPassword: (isReplacingPassword && smtpAppPassword.trim()) ? smtpAppPassword.trim() : undefined
+      }, currentUser?.email || 'mehedihasan1303@gmail.com');
 
       if (res.success && res.config) {
         setSmtpConfig(res.config);
         setSmtpAppPassword(''); // Clear client memory of password immediately
+        setIsReplacingPassword(false);
         setIsConfirmingSmtpSave(false);
         setSmtpFeedback({
           success: true,
-          message: 'Gmail SMTP configuration saved securely to server. Secret app password stored exclusively on server runtime.'
+          message: res.message || 'Gmail SMTP configuration saved securely to server. Secret app password stored exclusively on server runtime.'
         });
         setTimeout(() => setSmtpFeedback(null), 6000);
       } else {
@@ -1268,40 +1290,91 @@ export const SystemSettingsView: React.FC = () => {
                   />
                 </div>
 
-                {/* Gmail App Password Input (Masked + Security Invariant Note) */}
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                      Gmail App Password (16 characters) <span className="text-rose-500">*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowAppPassword(!showAppPassword)}
-                      className="text-[11px] text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      {showAppPassword ? <EyeOff size={12} /> : <Eye size={12} />}
-                      <span>{showAppPassword ? 'Mask' : 'Reveal'}</span>
-                    </button>
-                  </div>
-                  <input
-                    type={showAppPassword ? 'text' : 'password'}
-                    value={smtpAppPassword}
-                    onChange={e => setSmtpAppPassword(e.target.value)}
-                    placeholder={smtpConfig.isPasswordConfigured ? '•••••••••••••••• (Configured — leave blank to keep)' : 'Enter 16-character Google App Password'}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  />
-                  
+                {/* Gmail App Password Section */}
+                <div className="space-y-2">
+                  {smtpConfig.isPasswordConfigured && !isReplacingPassword ? (
+                    /* Clear Indication: Password Already Configured on Server */
+                    <div className="p-3.5 bg-emerald-50/90 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-500/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                      <div className="flex items-start gap-2.5">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0 mt-0.5">
+                          <ShieldCheck size={16} />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-emerald-950 dark:text-emerald-200 flex items-center gap-2">
+                            <span>Google App Password Active & Configured</span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-200/80 dark:bg-emerald-800/60 text-emerald-900 dark:text-emerald-100 font-mono font-bold">
+                              Server Stored
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-emerald-800 dark:text-emerald-300 leading-snug mt-0.5">
+                            Active in protected server secret store. Leaving this untouched preserves your current credentials without exposing or overwriting them.
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsReplacingPassword(true);
+                          setSmtpAppPassword('');
+                        }}
+                        className="px-3.5 py-1.5 bg-white dark:bg-slate-800 border border-emerald-300 dark:border-emerald-600 text-emerald-800 dark:text-emerald-300 rounded-xl text-xs font-bold hover:bg-emerald-50 dark:hover:bg-slate-700 transition cursor-pointer shrink-0 shadow-xs self-start sm:self-auto flex items-center gap-1.5"
+                      >
+                        <KeyRound size={13} />
+                        <span>Change Password</span>
+                      </button>
+                    </div>
+                  ) : (
+                    /* Active Entry / Intentional Password Replacement */
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                          {isReplacingPassword ? 'New Google App Password (16 characters)' : 'Google App Password (16 characters)'} <span className="text-rose-500">*</span>
+                        </label>
+                        <div className="flex items-center gap-2.5">
+                          {isReplacingPassword && smtpConfig.isPasswordConfigured && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsReplacingPassword(false);
+                                setSmtpAppPassword('');
+                              }}
+                              className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+                            >
+                              Keep Current Password
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setShowAppPassword(!showAppPassword)}
+                            className="text-[11px] text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 cursor-pointer"
+                          >
+                            {showAppPassword ? <EyeOff size={12} /> : <Eye size={12} />}
+                            <span>{showAppPassword ? 'Mask' : 'Reveal'}</span>
+                          </button>
+                        </div>
+                      </div>
+                      <input
+                        type={showAppPassword ? 'text' : 'password'}
+                        value={smtpAppPassword}
+                        onChange={e => setSmtpAppPassword(e.target.value)}
+                        autoComplete="new-password"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 rounded-xl text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      />
+                    </div>
+                  )}
+
                   {/* Google App Password Guidance Notice */}
-                  <div className="mt-2 p-3 bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-500/20 rounded-xl text-[11px] text-purple-950 dark:text-purple-200 space-y-1">
+                  <div className="p-3 bg-purple-50/60 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-500/20 rounded-xl text-[11px] text-purple-950 dark:text-purple-200 space-y-1">
                     <div className="font-bold flex items-center gap-1.5 text-purple-800 dark:text-purple-300">
                       <Info size={13} />
                       <span>Google Account Security Requirement</span>
                     </div>
                     <p className="leading-relaxed opacity-90">
-                      Use a dedicated <strong>App Password</strong> generated under <em>Google Account → Security → 2-Step Verification → App passwords</em>. Your standard Google login password will not work.
+                      Use a dedicated <strong>App Password</strong> generated under <em>Google Account → Security → 2-Step Verification → App passwords</em>.
                     </p>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-                      Security Invariant: The secret password is held exclusively on server runtime and is never returned in client bundles or public database.
+                      Security Invariant: The secret password is held exclusively on server runtime and is never returned in client bundles, localStorage, or public database.
                     </p>
                   </div>
                 </div>
@@ -1332,6 +1405,22 @@ export const SystemSettingsView: React.FC = () => {
                     placeholder="mehedihasan1303@gmail.com"
                     className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                   />
+                </div>
+
+                {/* Vercel Environment Variables Integration Guidance */}
+                <div className="p-3 bg-indigo-50/70 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-500/20 rounded-xl text-xs space-y-1.5">
+                  <div className="font-bold text-indigo-950 dark:text-indigo-200 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles size={13} className="text-indigo-500" />
+                      <span>Vercel Permanent Storage Tip:</span>
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                      {smtpConfig.envConfigured ? '✓ Vercel Env Active' : 'Server Memory / File Active'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-indigo-900 dark:text-indigo-300 leading-relaxed">
+                    Saving settings here updates the active server runtime immediately. For permanent resilience across Vercel cold restarts without filesystem dependencies, define <code className="font-mono bg-indigo-100 dark:bg-indigo-900/50 px-1 py-0.5 rounded text-[10px]">SMTP_USER</code> and <code className="font-mono bg-indigo-100 dark:bg-indigo-900/50 px-1 py-0.5 rounded text-[10px]">SMTP_PASS</code> in your <strong>Vercel Project Settings → Environment Variables</strong>.
+                  </p>
                 </div>
               </div>
 
@@ -1557,7 +1646,7 @@ export const SystemSettingsView: React.FC = () => {
             <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-xs space-y-1 font-mono text-slate-700 dark:text-slate-300">
               <div>Host: {smtpHost}:{smtpPort} ({smtpSecurityMode})</div>
               <div>Sender: {smtpSenderEmail}</div>
-              <div>Password: {smtpAppPassword.trim() ? '•••••••••••••••• (New password will be stored)' : 'Existing password retained'}</div>
+              <div>Password: {isReplacingPassword && smtpAppPassword.trim() ? 'New 16-character password will be committed' : (smtpConfig.isPasswordConfigured ? 'Existing server-configured password retained' : 'Not configured')}</div>
             </div>
 
             <div className="flex items-center justify-end gap-2.5 pt-2">

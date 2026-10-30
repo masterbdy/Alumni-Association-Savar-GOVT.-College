@@ -19,6 +19,9 @@ interface ServerSmtpStore {
 }
 
 const CONFIG_FILE_PATH = path.resolve(process.cwd(), '.smtp-config.json');
+const FALLBACK_FILE_PATH = path.resolve('/tmp', '.smtp-config.json');
+
+let persistedLocation: 'primary_file' | 'fallback_file' | 'memory_only' = 'memory_only';
 
 // Memory store initialized from server environment variables if available
 let inMemoryStore: ServerSmtpStore = {
@@ -26,34 +29,54 @@ let inMemoryStore: ServerSmtpStore = {
   host: process.env.SMTP_HOST || 'smtp.gmail.com',
   port: Number(process.env.SMTP_PORT) || 465,
   securityMode: (process.env.SMTP_PORT === '587' || process.env.SMTP_SECURE === 'false') ? 'STARTTLS' : 'SSL',
-  senderEmail: process.env.SMTP_USER || '',
+  senderEmail: process.env.SMTP_USER || process.env.GMAIL_USER || '',
   senderDisplayName: process.env.SMTP_FROM_NAME || 'Department Of Management, Savar Govt. College',
   replyToEmail: process.env.SMTP_REPLY_TO || '',
-  appPassword: process.env.SMTP_PASS || '',
+  appPassword: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || '',
   lastTestStatus: 'untested'
 };
 
-// Try to hydrate from local server file if present
+// Try to hydrate from local server file (primary or fallback /tmp)
 try {
+  let loadedRaw: string | null = null;
   if (fs.existsSync(CONFIG_FILE_PATH)) {
-    const raw = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
+    loadedRaw = fs.readFileSync(CONFIG_FILE_PATH, 'utf-8');
+    persistedLocation = 'primary_file';
+  } else if (fs.existsSync(FALLBACK_FILE_PATH)) {
+    loadedRaw = fs.readFileSync(FALLBACK_FILE_PATH, 'utf-8');
+    persistedLocation = 'fallback_file';
+  }
+
+  if (loadedRaw) {
+    const parsed = JSON.parse(loadedRaw);
     inMemoryStore = {
       ...inMemoryStore,
       ...parsed,
       // Environment variable takes precedence if provided
-      appPassword: process.env.SMTP_PASS || parsed.appPassword || ''
+      appPassword: process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD || parsed.appPassword || ''
     };
   }
 } catch (e) {
   console.warn('[SMTP Service] Could not read .smtp-config.json:', e);
 }
 
-const saveStoreToFile = () => {
+const saveStoreToFile = (): boolean => {
+  // 1. Try primary file path
   try {
     fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(inMemoryStore, null, 2), { mode: 0o600 });
-  } catch (e) {
-    console.warn('[SMTP Service] Could not persist to .smtp-config.json:', e);
+    persistedLocation = 'primary_file';
+    return true;
+  } catch (errPrimary) {
+    // 2. Try fallback in /tmp (e.g. read-only container/serverless)
+    try {
+      fs.writeFileSync(FALLBACK_FILE_PATH, JSON.stringify(inMemoryStore, null, 2), { mode: 0o600 });
+      persistedLocation = 'fallback_file';
+      return true;
+    } catch (errFallback) {
+      console.warn('[SMTP Service] Could not persist to file system (operating in protected memory):', errFallback);
+      persistedLocation = 'memory_only';
+      return false;
+    }
   }
 };
 
@@ -61,10 +84,20 @@ let lastTestDispatchTime = 0;
 const TEST_COOLDOWN_MS = 15000; // 15 seconds rate limit between test dispatches
 
 /**
+ * Validates whether an entered string consists of masked bullets or asterisks.
+ */
+export function isMaskOrPlaceholder(val: string): boolean {
+  if (!val) return false;
+  // Unicode bullets, asterisks, black circles, middots: •, ●, ·, ◦, *
+  return /[•●·◦*]/.test(val);
+}
+
+/**
  * Returns public, non-sensitive configuration to the client.
  * Strictly avoids returning the appPassword.
  */
 export function getPublicSmtpConfig(): SmtpConfigPublic {
+  const isEnvSet = Boolean(process.env.SMTP_PASS || process.env.GMAIL_APP_PASSWORD);
   return {
     service: inMemoryStore.service,
     host: inMemoryStore.host,
@@ -74,6 +107,13 @@ export function getPublicSmtpConfig(): SmtpConfigPublic {
     senderDisplayName: inMemoryStore.senderDisplayName,
     replyToEmail: inMemoryStore.replyToEmail,
     isPasswordConfigured: Boolean(inMemoryStore.appPassword && inMemoryStore.appPassword.trim().length > 0),
+    persistedLocation,
+    envConfigured: isEnvSet,
+    persistenceMessage: persistedLocation === 'primary_file' 
+      ? 'Configured in secure server file (.smtp-config.json)'
+      : persistedLocation === 'fallback_file'
+      ? 'Configured in server runtime fallback (/tmp/.smtp-config.json)'
+      : 'Configured in server runtime memory',
     lastTestStatus: inMemoryStore.lastTestStatus,
     lastTestTimestamp: inMemoryStore.lastTestTimestamp,
     lastTestError: inMemoryStore.lastTestError,
@@ -84,11 +124,12 @@ export function getPublicSmtpConfig(): SmtpConfigPublic {
 /**
  * Updates SMTP configuration.
  * Retains existing password if empty or omitted.
+ * Explicitly rejects masked placeholder characters (bullets/asterisks).
  */
 export function updateSmtpConfig(
   payload: SmtpConfigSavePayload,
   actorEmail: string
-): { success: boolean; config?: SmtpConfigPublic; error?: string } {
+): { success: boolean; config?: SmtpConfigPublic; message?: string; error?: string } {
   // Authoritative authorization gate
   if (actorEmail.toLowerCase() !== 'mehedihasan1303@gmail.com') {
     return {
@@ -110,11 +151,27 @@ export function updateSmtpConfig(
     return { success: false, error: 'Please provide a valid sender Gmail address.' };
   }
 
-  // Password handling: Keep existing if user left it blank
+  // Password handling:
+  // 1. If password is provided: validate it's not bullets or placeholder
   let newPassword = inMemoryStore.appPassword || '';
-  if (payload.appPassword && payload.appPassword.trim()) {
-    // Strip accidental whitespace commonly present in Google App Passwords (e.g. "abcd efgh ijkl mnop")
-    newPassword = payload.appPassword.trim().replace(/\s+/g, '');
+  if (payload.appPassword !== undefined && payload.appPassword !== null && payload.appPassword.trim() !== '') {
+    const rawInput = payload.appPassword.trim();
+    if (isMaskOrPlaceholder(rawInput)) {
+      return {
+        success: false,
+        error: 'Masked placeholder characters (bullets/asterisks) cannot be used as an App Password. Enter the actual 16-character Google App Password or leave blank to retain existing password.'
+      };
+    }
+
+    // Strip accidental spaces commonly copied from Google 2-Step Verification (e.g. "abcd efgh ijkl mnop")
+    const cleaned = rawInput.replace(/\s+/g, '');
+    if (cleaned.length < 8) {
+      return {
+        success: false,
+        error: 'Google App Password is too short. Google App Passwords are 16 characters.'
+      };
+    }
+    newPassword = cleaned;
   }
 
   inMemoryStore = {
@@ -128,10 +185,16 @@ export function updateSmtpConfig(
     appPassword: newPassword
   };
 
-  saveStoreToFile();
+  const fileSaved = saveStoreToFile();
 
   console.log(`[SMTP Service] System Controller updated SMTP settings for ${senderEmail} (Port ${port}, ${inMemoryStore.securityMode})`);
-  return { success: true, config: getPublicSmtpConfig() };
+  return { 
+    success: true, 
+    config: getPublicSmtpConfig(),
+    message: fileSaved
+      ? 'Gmail SMTP configuration saved securely to server. Secret password is held exclusively on server runtime.'
+      : 'Gmail SMTP configuration updated in active server memory (Read-only container filesystem detected; configure Vercel Environment Variables for permanent redeployment persistence).'
+  };
 }
 
 /**

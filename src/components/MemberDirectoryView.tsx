@@ -236,7 +236,6 @@ export const MemberDirectoryView: React.FC = () => {
                   required
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
-                  placeholder="e.g. Dr. Mahmudul Hasan"
                   className="w-full bg-[#FAFAFA] border border-[#DBDBDB] focus:border-[#DD2A7B] focus:bg-white rounded-xl px-3 py-2 text-xs text-[#262626] focus:outline-none"
                 />
               </div>
@@ -248,7 +247,6 @@ export const MemberDirectoryView: React.FC = () => {
                   required
                   value={newEmail}
                   onChange={e => setNewEmail(e.target.value)}
-                  placeholder="e.g. mahmud@example.com"
                   className="w-full bg-[#FAFAFA] border border-[#DBDBDB] focus:border-[#DD2A7B] focus:bg-white rounded-xl px-3 py-2 text-xs text-[#262626] focus:outline-none"
                 />
               </div>
