@@ -15,15 +15,16 @@ const FIREBASE_BACKUP_STORAGE_KEY = 'nexus_firebase_config_backups_v1';
 
 /**
  * Returns default/initial Firebase editable configuration.
+ * Prioritizes environment variables, with resilient project fallback.
  */
 export function getDefaultFirebaseConfig(): FirebaseEditableConfig {
   const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : ({} as Record<string, string>);
   return {
     apiKey: env.VITE_FIREBASE_API_KEY || 'AIzaSyExampleKey123456789',
-    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'alumni-association.firebaseapp.com',
-    databaseUrl: env.VITE_FIREBASE_DATABASE_URL || 'https://alumni-association-default-rtdb.firebaseio.com',
-    projectId: env.VITE_FIREBASE_PROJECT_ID || 'alumni-association-sgc',
-    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'alumni-association.appspot.com',
+    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'black-spider-football.firebaseapp.com',
+    databaseUrl: env.VITE_FIREBASE_DATABASE_URL || 'https://black-spider-football-default-rtdb.firebaseio.com',
+    projectId: env.VITE_FIREBASE_PROJECT_ID || 'black-spider-football',
+    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'black-spider-football.appspot.com',
     messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '88144623713',
     appId: env.VITE_FIREBASE_APP_ID || '1:88144623713:web:example',
     lastUpdatedAt: '2026-01-01T00:00:00Z',
@@ -33,13 +34,17 @@ export function getDefaultFirebaseConfig(): FirebaseEditableConfig {
 
 /**
  * Reads stored Firebase configuration (custom override if saved, otherwise default).
+ * Guards against corrupted, empty, or wiped values.
  */
 export function getStoredFirebaseConfig(): FirebaseEditableConfig {
   try {
     if (typeof localStorage !== 'undefined') {
       const saved = localStorage.getItem(FIREBASE_CONFIG_STORAGE_KEY);
       if (saved) {
-        return { ...getDefaultFirebaseConfig(), ...JSON.parse(saved) };
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && parsed.projectId && parsed.databaseUrl) {
+          return { ...getDefaultFirebaseConfig(), ...parsed };
+        }
       }
     }
   } catch (e) {

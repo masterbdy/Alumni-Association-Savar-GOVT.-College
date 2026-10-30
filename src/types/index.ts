@@ -425,11 +425,87 @@ export type AdminSectionTab =
   | 'reports' 
   | 'moderation'
   | 'audit'
-  | 'settings';
+  | 'settings'
+  | 'backup';
 
 export type AppTab = 'feed' | 'directory' | 'messages' | 'donations' | 'profile' | 'admin';
 
 export type SystemSettingsTab = 'firebase' | 'email' | 'security' | 'health';
+
+// ==========================================
+// System Controller Data Backup & Import Types
+// ==========================================
+export interface BackupRecordCounts {
+  users: number;
+  posts: number;
+  conversations: number;
+  messages: number;
+  campaigns: number;
+  donations: number;
+  activityLogs: number;
+  adminLimits: number;
+  permissionMatrix: number;
+  emergencyControls: number;
+  appLogo: number;
+  emailSettings: number;
+  communityReports: number;
+  moderationActions: number;
+  moderationAppeals: number;
+}
+
+export interface ApplicationBackupData {
+  backupId: string;
+  exportedAt: string;
+  exportedBy: string;
+  appVersion: string;
+  schemaVersion: string;
+  systemName: string;
+  organization: string;
+  modulesIncluded: string[];
+  recordCounts: BackupRecordCounts;
+  data: {
+    users: Partial<UserProfile>[];
+    posts: Post[];
+    conversations: Conversation[];
+    messages: Message[];
+    campaigns: DonationCampaign[];
+    donations: DonationRecord[];
+    activityLogs: ActivityLog[];
+    adminLimits: Record<string, AdminPermissionLimits>;
+    permissionMatrix: ModulePermissionRule[];
+    emergencyControls: SystemEmergencyControls;
+    appLogo: AppLogoConfig;
+    emailSettings: EmailSystemSettingsConfig;
+    communityReports: CommunityReport[];
+    moderationActions: ModerationAction[];
+    moderationAppeals: ModerationAppeal[];
+  };
+}
+
+export type BackupRestoreMode = 'merge' | 'selected_modules' | 'full_restore';
+
+export interface BackupHistoryEntry {
+  id: string;
+  timestamp: string;
+  filename: string;
+  type: 'export' | 'merge_import' | 'module_restore' | 'full_restore' | 'pre_import_snapshot';
+  recordCount: number;
+  actorEmail: string;
+  status: 'success' | 'failed' | 'cancelled';
+  details?: string;
+  modulesAffected?: string[];
+  errorMessage?: string;
+}
+
+export type CloudSyncStatus = 'local_saved' | 'sync_pending' | 'synced' | 'sync_failed' | 'offline';
+
+export interface CloudSyncState {
+  status: CloudSyncStatus;
+  lastSyncedAt?: string;
+  pendingCount: number;
+  lastError?: string;
+  verifiedEndpoint?: string;
+}
 
 export interface EmailSystemSettingsConfig {
   senderDisplayName: string;

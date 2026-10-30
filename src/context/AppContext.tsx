@@ -27,7 +27,12 @@ import {
   ReportCategory,
   ReportTargetType,
   ReportStatus,
-  ModerationActionType
+  ModerationActionType,
+  ApplicationBackupData,
+  BackupRestoreMode,
+  BackupHistoryEntry,
+  CloudSyncState,
+  CloudSyncStatus
 } from '../types';
 import { 
   INITIAL_USERS, 
@@ -50,6 +55,17 @@ import {
 import { requestOtp, verifyOtp, consumeVerifiedOtp } from '../services/otpService';
 import { CacheService } from '../services/cacheService';
 import { testEmailEndpoint } from '../services/systemDiagnosticsService';
+import { 
+  exportApplicationBackup, 
+  executeBackupRestore, 
+  getBackupHistory 
+} from '../services/dataBackupService';
+import { 
+  enqueueCloudSync, 
+  testDatabaseWriteRead, 
+  flushPendingSyncQueue,
+  getPendingSyncQueue 
+} from '../services/cloudSyncService';
 import { 
   isCampaignExpired, 
   getEffectiveCampaignStatus, 
@@ -277,6 +293,16 @@ interface AppContextType {
   revokeUserSessions: (targetUid: string, reason: string, adminReauthPassword?: string) => { success: boolean; error?: string };
   toggleAccountDisabled: (targetUid: string, reason: string, adminReauthPassword?: string) => { success: boolean; error?: string };
   validateSystemControllerReauth: (password: string) => boolean;
+
+  // Data Backup, Recovery & Export Center (System Controller Only)
+  backupHistory: BackupHistoryEntry[];
+  exportDataBackup: (selectedModules?: string[]) => { success: boolean; filename?: string; error?: string };
+  importDataBackup: (backup: ApplicationBackupData, mode: BackupRestoreMode, selectedModules?: string[]) => { success: boolean; error?: string; restoredCounts?: any };
+
+  // Real Cloud Database Synchronization
+  cloudSyncState: CloudSyncState;
+  triggerCloudSync: () => Promise<{ success: boolean; message: string }>;
+  testCloudWriteRead: () => Promise<{ success: boolean; status: CloudSyncStatus; message: string; latencyMs: number }>;
 }
 
 
@@ -387,14 +413,37 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return baseList;
   };
 
+  // Safe session validator: Strict session verification prevents auto-authenticating bootstrap accounts
+  const validateSavedSession = (savedState: any, availableUsers: UserProfile[]): { isValid: boolean; uid: string } => {
+    if (!savedState || savedState.isAuthenticated !== true || !savedState.currentUserId) {
+      return { isValid: false, uid: '' };
+    }
+    const matchingUser = availableUsers.find(u => u.uid === savedState.currentUserId);
+    if (!matchingUser) {
+      return { isValid: false, uid: '' };
+    }
+    if (matchingUser.isAccountDisabled || matchingUser.status === 'suspended' || matchingUser.status === 'rejected') {
+      return { isValid: false, uid: '' };
+    }
+    return { isValid: true, uid: matchingUser.uid };
+  };
+
   const initialUsersList = bootstrapUsers(saved?.users);
+  const validatedSession = validateSavedSession(saved, initialUsersList);
+
   const [users, setUsers] = useState<UserProfile[]>(initialUsersList);
-  const [currentUserId, setCurrentUserId] = useState<string>(
-    saved?.currentUserId || initialUsersList[0]?.uid || 'usr_superadmin_bootstrap'
-  );
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(
-    saved?.isAuthenticated !== undefined ? saved.isAuthenticated : true
-  );
+  const [currentUserId, setCurrentUserId] = useState<string>(validatedSession.uid);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(validatedSession.isValid);
+
+  // Data Backup & History state
+  const [backupHistory, setBackupHistory] = useState<BackupHistoryEntry[]>(() => getBackupHistory());
+
+  // Cloud Synchronization state
+  const [cloudSyncState, setCloudSyncState] = useState<CloudSyncState>({
+    status: 'local_saved',
+    pendingCount: getPendingSyncQueue().length,
+    lastSyncedAt: undefined
+  });
   const [activeTab, setActiveTab] = useState<AppTab>('feed');
   const [adminActiveSection, setAdminActiveSection] = useState<AdminSectionTab>('overview');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
@@ -535,28 +584,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => clearInterval(interval);
   }, [adminSession]);
 
-  // User identity isolation
-  const authenticatedUser = users.find(u => u.uid === currentUserId) || users[0] || initialUsersList[0] || INITIAL_USERS[0];
+  // Anonymous guest representation for unauthenticated state
+  const anonymousGuest: UserProfile = {
+    uid: 'usr_guest',
+    email: '',
+    displayName: 'Guest Visitor',
+    username: 'guest',
+    headline: 'Unauthenticated Visitor',
+    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+    role: 'member',
+    status: 'pending',
+    joinedAt: '2026-01-01T00:00:00Z',
+    bio: 'Unauthenticated visitor. Please sign in with member credentials to access community features.'
+  };
+
+  // User identity isolation: Strictly enforce that unauthenticated sessions have NO user access
+  const authenticatedUser = isAuthenticated 
+    ? (users.find(u => u.uid === currentUserId) || null)
+    : null;
+
   const isAdministrativeAccessActive = !!(
+    isAuthenticated &&
     adminSession && 
     adminSession.isActive && 
     new Date(adminSession.expiresAt).getTime() > Date.now()
   );
 
-  const effectiveUser = isAdministrativeAccessActive
+  const effectiveUser = isAdministrativeAccessActive && authenticatedUser
     ? (users.find(u => u.uid === adminSession.targetUid) || authenticatedUser)
-    : authenticatedUser;
+    : (authenticatedUser || anonymousGuest);
 
-  const currentUser = effectiveUser || INITIAL_USERS[0];
+  const currentUser = effectiveUser;
   const authenticatedAdmin = isAdministrativeAccessActive ? authenticatedUser : null;
 
-  // Authoritative System Controller check - STRICTLY mehedihasan1303@gmail.com
+  // Authoritative System Controller check - STRICTLY mehedihasan1303@gmail.com AND isAuthenticated
   const authorizedSuperAdminEmails = ['mehedihasan1303@gmail.com', 'mehedibasan1303@gmai.com'];
-  const isSuperAdmin = currentUser.role === 'super_admin' && authorizedSuperAdminEmails.includes(currentUser.email.toLowerCase());
-  const isAdmin = currentUser.role === 'admin';
-  const isModerator = currentUser.role === 'moderator';
-  const isSystemController = (isSuperAdmin && authorizedSuperAdminEmails.includes(currentUser.email.toLowerCase())) ||
-    (authenticatedAdmin?.role === 'super_admin' && authorizedSuperAdminEmails.includes(authenticatedAdmin.email.toLowerCase()));
+  const isSuperAdmin = isAuthenticated && currentUser.role === 'super_admin' && authorizedSuperAdminEmails.includes(currentUser.email.toLowerCase());
+  const isAdmin = isAuthenticated && currentUser.role === 'admin';
+  const isModerator = isAuthenticated && currentUser.role === 'moderator';
+  const isSystemController = isAuthenticated && (
+    (isSuperAdmin && authorizedSuperAdminEmails.includes(currentUser.email.toLowerCase())) ||
+    (authenticatedAdmin?.role === 'super_admin' && authorizedSuperAdminEmails.includes(authenticatedAdmin.email.toLowerCase()))
+  );
 
   // Dynamic limits configured by System Controller
   const callerAdminLimits: AdminPermissionLimits = adminLimits[currentUser.uid] || DEFAULT_ADMIN_LIMITS;
@@ -585,7 +654,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return { success: false, error: 'Authentication session required.' };
     }
     const adminAccount = authenticatedUser;
-    if (adminAccount.role !== 'super_admin' || !authorizedSuperAdminEmails.includes(adminAccount.email.toLowerCase())) {
+    if (!adminAccount || adminAccount.role !== 'super_admin' || !authorizedSuperAdminEmails.includes(adminAccount.email.toLowerCase())) {
       return { 
         success: false, 
         error: 'Security Alert: Only the verified System Controller can initiate privileged administrative access.' 
@@ -658,7 +727,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Authoritative Re-authentication Validator
   const validateSystemControllerReauth = (password: string): boolean => {
     const adminAccount = authenticatedUser;
-    if (adminAccount.role !== 'super_admin' || !authorizedSuperAdminEmails.includes(adminAccount.email.toLowerCase())) {
+    if (!adminAccount || adminAccount.role !== 'super_admin' || !authorizedSuperAdminEmails.includes(adminAccount.email.toLowerCase())) {
       return false;
     }
     return adminAccount.passwordHash
@@ -835,6 +904,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       exitAdministrativeAccess();
     }
     setIsAuthenticated(false);
+    setCurrentUserId('');
     setShowAuthModal(true);
     setViewingMemberId(null);
     setActiveTab('feed');
@@ -2840,7 +2910,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.removeItem(STORAGE_KEY);
     const freshUsers = bootstrapUsers(INITIAL_USERS);
     setUsers(freshUsers);
-    setCurrentUserId('usr_superadmin_bootstrap');
+    setCurrentUserId('');
+    setIsAuthenticated(false);
+    setShowAuthModal(true);
     setPosts(INITIAL_POSTS);
     setConversations(INITIAL_CONVERSATIONS);
     setActiveConversationId(INITIAL_CONVERSATIONS[0]?.id || '');
@@ -2855,6 +2927,134 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setModerationActions(INITIAL_MODERATION_ACTIONS);
     setModerationAppeals(INITIAL_MODERATION_APPEALS);
     setActiveTab('feed');
+  };
+
+  // ==========================================
+  // System Controller Data Backup & Import Operations
+  // ==========================================
+  const exportDataBackup = (selectedModules?: string[]) => {
+    if (!isSystemController) {
+      return { success: false, error: 'Security Violation: Only System Controller can export application data.' };
+    }
+    const res = exportApplicationBackup(
+      {
+        users,
+        posts,
+        conversations,
+        messages,
+        campaigns,
+        donations,
+        activityLogs,
+        adminLimits,
+        permissionMatrix,
+        emergencyControls,
+        appLogo,
+        emailSettings,
+        communityReports,
+        moderationActions,
+        moderationAppeals
+      },
+      currentUser.email,
+      selectedModules
+    );
+    if (res.success) {
+      setBackupHistory(getBackupHistory());
+    }
+    return res;
+  };
+
+  const importDataBackup = (
+    backup: ApplicationBackupData,
+    mode: BackupRestoreMode,
+    selectedModules?: string[]
+  ) => {
+    if (!isSystemController) {
+      return { success: false, error: 'Security Violation: Only System Controller can restore application data.' };
+    }
+
+    const res = executeBackupRestore({
+      backup,
+      mode,
+      selectedModules,
+      actorEmail: currentUser.email,
+      currentState: {
+        users,
+        posts,
+        conversations,
+        messages,
+        campaigns,
+        donations,
+        activityLogs,
+        adminLimits,
+        permissionMatrix,
+        emergencyControls,
+        appLogo,
+        emailSettings,
+        communityReports,
+        moderationActions,
+        moderationAppeals
+      }
+    });
+
+    if (res.success && res.updatedState) {
+      const u = res.updatedState;
+      setUsers(u.users);
+      setPosts(u.posts);
+      setConversations(u.conversations);
+      setMessages(u.messages);
+      setCampaigns(u.campaigns);
+      setDonations(u.donations);
+      setActivityLogs(u.activityLogs);
+      setAdminLimits(u.adminLimits);
+      setPermissionMatrix(u.permissionMatrix);
+      setEmergencyControls(u.emergencyControls);
+      setAppLogo(u.appLogo);
+      setEmailSettings(u.emailSettings);
+      setCommunityReports(u.communityReports);
+      setModerationActions(u.moderationActions);
+      setModerationAppeals(u.moderationAppeals);
+      setBackupHistory(getBackupHistory());
+    }
+
+    return res;
+  };
+
+  // ==========================================
+  // Real Database Synchronization Operations
+  // ==========================================
+  const triggerCloudSync = async (): Promise<{ success: boolean; message: string }> => {
+    setCloudSyncState(prev => ({ ...prev, status: 'sync_pending' }));
+    const flushRes = await flushPendingSyncQueue();
+    const testRes = await testDatabaseWriteRead();
+
+    const newStatus: CloudSyncStatus = testRes.success 
+      ? (flushRes.remainingCount === 0 ? 'synced' : 'sync_pending')
+      : testRes.status;
+
+    setCloudSyncState({
+      status: newStatus,
+      lastSyncedAt: testRes.success ? new Date().toISOString() : undefined,
+      pendingCount: flushRes.remainingCount,
+      lastError: testRes.error || flushRes.lastError,
+      verifiedEndpoint: testRes.endpoint
+    });
+
+    return {
+      success: testRes.success,
+      message: testRes.message
+    };
+  };
+
+  const testCloudWriteRead = async (): Promise<{ success: boolean; status: CloudSyncStatus; message: string; latencyMs: number }> => {
+    const res = await testDatabaseWriteRead();
+    setCloudSyncState(prev => ({
+      ...prev,
+      status: res.status,
+      lastSyncedAt: res.success ? new Date().toISOString() : prev.lastSyncedAt,
+      lastError: res.error,
+      verifiedEndpoint: res.endpoint
+    }));
+    return res;
   };
 
   return (
@@ -2965,7 +3165,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         resolveAppeal,
         revokeUserSessions,
         toggleAccountDisabled,
-        validateSystemControllerReauth
+        validateSystemControllerReauth,
+        backupHistory,
+        exportDataBackup,
+        importDataBackup,
+        cloudSyncState,
+        triggerCloudSync,
+        testCloudWriteRead
       }}
     >
       {children}

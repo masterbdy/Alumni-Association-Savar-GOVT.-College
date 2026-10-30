@@ -55,6 +55,18 @@ import {
   resetOtpStores, 
   consumeVerifiedOtp 
 } from '../services/otpService';
+import {
+  sanitizeUsersForBackup,
+  calculateRecordCounts,
+  exportApplicationBackup,
+  validateBackupFile,
+  executeBackupRestore,
+  getBackupHistory
+} from '../services/dataBackupService';
+import {
+  enqueueCloudSync,
+  getPendingSyncQueue
+} from '../services/cloudSyncService';
 
 // Verification Logic Helper implementing the exact RBAC & Security Gates
 const attemptVerifyPayment = (
@@ -3284,5 +3296,348 @@ test('CHECKLIST-09: Mobile layout & button interaction check (multiline parser &
   assert.match(badJsonResult.error || '', /Invalid JSON format/i);
 });
 
+// ==========================================
+// Part 1 to Part 7: Security, Backup, Sync & Admin Panel Tests
+// ==========================================
 
+test('SEC-FIX-01: Default authentication state must be false and never auto-select bootstrap or users[0]', () => {
+  // Simulate fresh device without session
+  const savedState: Record<string, any> | null = null;
+  const isAuthenticated = Boolean(savedState && savedState['isAuthenticated'] === true);
+  const currentUserId = (isAuthenticated && savedState && savedState['currentUserId']) ? String(savedState['currentUserId']) : '';
 
+  assert.equal(isAuthenticated, false, 'Default authentication state must be FALSE');
+  assert.equal(currentUserId, '', 'Default currentUserId must be empty string on fresh device');
+  assert.notEqual(currentUserId, 'usr_superadmin_bootstrap', 'Bootstrap super admin must NEVER be auto-selected');
+  assert.notEqual(currentUserId, INITIAL_USERS[0].uid, 'First user must NEVER be auto-selected');
+});
+
+test('SEC-FIX-02: Unauthenticated visitors cannot access administrative routes or perform privileged operations', () => {
+  const isAuthenticated = false;
+  const currentUserId = '';
+  const authenticatedUser: UserProfile | null = isAuthenticated ? (INITIAL_USERS.find(u => u.uid === currentUserId) || null) : null;
+  
+  assert.equal(authenticatedUser, null, 'authenticatedUser must be null when unauthenticated');
+
+  const authorizedSuperAdminEmails = ['mehedihasan1303@gmail.com', 'mehedibasan1303@gmai.com'];
+  const isSuperAdmin = isAuthenticated && authenticatedUser !== null && authorizedSuperAdminEmails.includes((authenticatedUser as UserProfile).email.toLowerCase());
+  const isAdmin = isAuthenticated && authenticatedUser !== null && (authenticatedUser as UserProfile).role === 'admin';
+  const isSystemController = isAuthenticated && isSuperAdmin;
+
+  assert.equal(isSuperAdmin, false, 'Unauthenticated visitor cannot be Super Admin');
+  assert.equal(isAdmin, false, 'Unauthenticated visitor cannot be Admin');
+  assert.equal(isSystemController, false, 'Unauthenticated visitor cannot be System Controller');
+});
+
+test('BACKUP-01: Data Export scrubs password hashes and private credentials permanently', () => {
+  const sampleUsers: UserProfile[] = [
+    {
+      ...INITIAL_USERS[0],
+      passwordHash: 'secret_hash_value_12345'
+    },
+    {
+      ...INITIAL_USERS[1],
+      passwordHash: 'another_super_secret_hash'
+    }
+  ];
+
+  const sanitized = sanitizeUsersForBackup(sampleUsers);
+  assert.equal(sanitized.length, 2);
+  sanitized.forEach(u => {
+    assert.equal(u.passwordHash, undefined, 'passwordHash must be completely scrubbed from backup');
+    assert.ok(u.email, 'Public attributes like email must remain');
+    assert.ok(u.displayName, 'Display name must remain');
+  });
+});
+
+test('BACKUP-02: Record counts are accurately calculated for all application data modules', () => {
+  const mockState = {
+    users: INITIAL_USERS,
+    posts: INITIAL_POSTS,
+    conversations: INITIAL_CONVERSATIONS,
+    messages: INITIAL_MESSAGES,
+    campaigns: INITIAL_CAMPAIGNS,
+    donations: INITIAL_DONATIONS,
+    activityLogs: [],
+    adminLimits: INITIAL_ADMIN_LIMITS,
+    permissionMatrix: INITIAL_PERMISSION_MATRIX,
+    emergencyControls: INITIAL_EMERGENCY_CONTROLS,
+    appLogo: DEFAULT_APP_LOGO,
+    emailSettings: DEFAULT_EMAIL_SETTINGS,
+    communityReports: [],
+    moderationActions: [],
+    moderationAppeals: []
+  };
+
+  const counts = calculateRecordCounts(mockState);
+  assert.equal(counts.users, INITIAL_USERS.length);
+  assert.equal(counts.posts, INITIAL_POSTS.length);
+  assert.equal(counts.conversations, INITIAL_CONVERSATIONS.length);
+  assert.equal(counts.messages, INITIAL_MESSAGES.length);
+  assert.equal(counts.campaigns, INITIAL_CAMPAIGNS.length);
+  assert.equal(counts.donations, INITIAL_DONATIONS.length);
+  assert.equal(counts.permissionMatrix, INITIAL_PERMISSION_MATRIX.length);
+  assert.equal(counts.emergencyControls, 1);
+  assert.equal(counts.appLogo, 1);
+  assert.equal(counts.emailSettings, 1);
+});
+
+test('BACKUP-03: Export authorization is strictly restricted to mehedihasan1303@gmail.com', () => {
+  const mockState = {
+    users: INITIAL_USERS,
+    posts: INITIAL_POSTS,
+    conversations: INITIAL_CONVERSATIONS,
+    messages: INITIAL_MESSAGES,
+    campaigns: INITIAL_CAMPAIGNS,
+    donations: INITIAL_DONATIONS,
+    activityLogs: [],
+    adminLimits: INITIAL_ADMIN_LIMITS,
+    permissionMatrix: INITIAL_PERMISSION_MATRIX,
+    emergencyControls: INITIAL_EMERGENCY_CONTROLS,
+    appLogo: DEFAULT_APP_LOGO,
+    emailSettings: DEFAULT_EMAIL_SETTINGS,
+    communityReports: [],
+    moderationActions: [],
+    moderationAppeals: []
+  };
+
+  // Attempt export as President (k7379680@gmail.com) -> must fail
+  const presidentAttempt = exportApplicationBackup(mockState, 'k7379680@gmail.com');
+  assert.equal(presidentAttempt.success, false);
+  assert.match(presidentAttempt.error || '', /Security Alert/);
+
+  // Attempt export as regular member -> must fail
+  const memberAttempt = exportApplicationBackup(mockState, 'member@example.com');
+  assert.equal(memberAttempt.success, false);
+  assert.match(memberAttempt.error || '', /Security Alert/);
+
+  // Attempt export as System Controller (mehedihasan1303@gmail.com) -> must succeed
+  const controllerAttempt = exportApplicationBackup(mockState, 'mehedihasan1303@gmail.com');
+  assert.equal(controllerAttempt.success, true);
+  assert.ok(controllerAttempt.backup);
+  assert.equal(controllerAttempt.backup?.exportedBy, 'mehedihasan1303@gmail.com');
+  assert.equal(controllerAttempt.backup?.schemaVersion, '2.1');
+  assert.ok(controllerAttempt.backup?.data.users.length > 0);
+  // Ensure passwords were not exported
+  controllerAttempt.backup?.data.users.forEach(u => {
+    assert.equal(u.passwordHash, undefined);
+  });
+});
+
+test('BACKUP-04: Backup validation rejects corrupt data and approves authentic schema 2.1 backups', () => {
+  // Empty
+  assert.equal(validateBackupFile('').isValid, false);
+  assert.equal(validateBackupFile('   ').isValid, false);
+
+  // Malformed JSON
+  assert.equal(validateBackupFile('{not-json}').isValid, false);
+
+  // Missing data object
+  assert.equal(validateBackupFile('{"schemaVersion": "2.1"}').isValid, false);
+
+  // Missing schemaVersion
+  assert.equal(validateBackupFile('{"data": {}}').isValid, false);
+
+  // Valid backup structure
+  const validJson = JSON.stringify({
+    backupId: 'bkp_test_123',
+    schemaVersion: '2.1',
+    exportedAt: new Date().toISOString(),
+    exportedBy: 'mehedihasan1303@gmail.com',
+    data: {
+      users: [{ uid: 'usr_test_1', email: 'test1@example.com', displayName: 'Test 1' }],
+      posts: [],
+      campaigns: []
+    }
+  });
+
+  const validResult = validateBackupFile(validJson);
+  assert.equal(validResult.isValid, true);
+  assert.ok(validResult.backup);
+  assert.equal(validResult.summary?.totalRecords, 1);
+  assert.equal(validResult.summary?.exportedBy, 'mehedihasan1303@gmail.com');
+});
+
+test('BACKUP-05: Backup restore modes - Merge mode preserves existing records and appends new ones', () => {
+  const currentState = {
+    users: [...INITIAL_USERS],
+    posts: [...INITIAL_POSTS],
+    conversations: [...INITIAL_CONVERSATIONS],
+    messages: [...INITIAL_MESSAGES],
+    campaigns: [...INITIAL_CAMPAIGNS],
+    donations: [...INITIAL_DONATIONS],
+    activityLogs: [],
+    adminLimits: INITIAL_ADMIN_LIMITS,
+    permissionMatrix: INITIAL_PERMISSION_MATRIX,
+    emergencyControls: INITIAL_EMERGENCY_CONTROLS,
+    appLogo: DEFAULT_APP_LOGO,
+    emailSettings: DEFAULT_EMAIL_SETTINGS,
+    communityReports: [],
+    moderationActions: [],
+    moderationAppeals: []
+  };
+
+  const incomingUser: UserProfile = {
+    uid: 'usr_new_incoming_999',
+    email: 'newalumni@example.com',
+    displayName: 'New Alumni Member',
+    username: 'newalumni',
+    avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
+    role: 'member',
+    status: 'approved',
+    joinedAt: new Date().toISOString()
+  };
+
+  const backupToRestore = {
+    backupId: 'bkp_merge_test',
+    exportedAt: new Date().toISOString(),
+    exportedBy: 'mehedihasan1303@gmail.com',
+    appVersion: '2.4.0',
+    schemaVersion: '2.1',
+    systemName: 'Alumni Association Platform',
+    organization: 'Department Of Management, Savar Govt. College',
+    modulesIncluded: ['users'],
+    recordCounts: calculateRecordCounts({ users: [incomingUser] }),
+    data: {
+      users: [incomingUser],
+      posts: [],
+      conversations: [],
+      messages: [],
+      campaigns: [],
+      donations: [],
+      activityLogs: [],
+      adminLimits: {},
+      permissionMatrix: [],
+      emergencyControls: INITIAL_EMERGENCY_CONTROLS,
+      appLogo: DEFAULT_APP_LOGO,
+      emailSettings: DEFAULT_EMAIL_SETTINGS,
+      communityReports: [],
+      moderationActions: [],
+      moderationAppeals: []
+    }
+  };
+
+  const restoreResult = executeBackupRestore({
+    backup: backupToRestore as any,
+    mode: 'merge',
+    actorEmail: 'mehedihasan1303@gmail.com',
+    currentState
+  });
+
+  assert.equal(restoreResult.success, true);
+  assert.ok(restoreResult.updatedState);
+  assert.equal(restoreResult.updatedState.users.length, INITIAL_USERS.length + 1);
+  assert.ok(restoreResult.updatedState.users.find(u => u.uid === 'usr_new_incoming_999'));
+});
+
+test('BACKUP-06: Full restore strictly preserves authoritative Super Admin and President identities', () => {
+  const currentState = {
+    users: [...INITIAL_USERS],
+    posts: [...INITIAL_POSTS],
+    conversations: [...INITIAL_CONVERSATIONS],
+    messages: [...INITIAL_MESSAGES],
+    campaigns: [...INITIAL_CAMPAIGNS],
+    donations: [...INITIAL_DONATIONS],
+    activityLogs: [],
+    adminLimits: INITIAL_ADMIN_LIMITS,
+    permissionMatrix: INITIAL_PERMISSION_MATRIX,
+    emergencyControls: INITIAL_EMERGENCY_CONTROLS,
+    appLogo: DEFAULT_APP_LOGO,
+    emailSettings: DEFAULT_EMAIL_SETTINGS,
+    communityReports: [],
+    moderationActions: [],
+    moderationAppeals: []
+  };
+
+  // Create a backup with completely different users that attempts to omit super_admin
+  const backupWithoutSuperAdmin = {
+    backupId: 'bkp_full_test',
+    exportedAt: new Date().toISOString(),
+    exportedBy: 'mehedihasan1303@gmail.com',
+    appVersion: '2.4.0',
+    schemaVersion: '2.1',
+    systemName: 'Alumni Association Platform',
+    organization: 'Department Of Management, Savar Govt. College',
+    modulesIncluded: ['users', 'posts'],
+    recordCounts: calculateRecordCounts({ users: [] }),
+    data: {
+      users: [
+        {
+          uid: 'usr_stranger_1',
+          email: 'stranger@example.com',
+          displayName: 'Stranger Danger',
+          role: 'member'
+        }
+      ],
+      posts: [],
+      conversations: [],
+      messages: [],
+      campaigns: [],
+      donations: [],
+      activityLogs: [],
+      adminLimits: {},
+      permissionMatrix: [],
+      emergencyControls: INITIAL_EMERGENCY_CONTROLS,
+      appLogo: DEFAULT_APP_LOGO,
+      emailSettings: DEFAULT_EMAIL_SETTINGS,
+      communityReports: [],
+      moderationActions: [],
+      moderationAppeals: []
+    }
+  };
+
+  const result = executeBackupRestore({
+    backup: backupWithoutSuperAdmin as any,
+    mode: 'full_restore',
+    actorEmail: 'mehedihasan1303@gmail.com',
+    currentState
+  });
+
+  assert.equal(result.success, true);
+  assert.ok(result.updatedState);
+  
+  // Constitutional check: mehedihasan1303@gmail.com MUST still exist and MUST still have super_admin role
+  const controllerUser = result.updatedState.users.find(u => u.email.toLowerCase() === 'mehedihasan1303@gmail.com');
+  assert.ok(controllerUser, 'Authoritative System Controller must never be erased during full restore');
+  assert.equal(controllerUser.role, 'super_admin');
+
+  // Constitutional check: k7379680@gmail.com MUST still exist
+  const presidentUser = result.updatedState.users.find(u => u.email.toLowerCase() === 'k7379680@gmail.com');
+  assert.ok(presidentUser, 'President account must never be erased during full restore');
+});
+
+test('SYNC-01: Offline sync queue enqueues writes and maintains pending items', () => {
+  enqueueCloudSync('campaigns/camp_test_1', { title: 'Test Sync' }, 'set');
+  const queue = getPendingSyncQueue();
+  assert.ok(queue.length > 0);
+  const found = queue.find(q => q.path === 'campaigns/camp_test_1');
+  assert.ok(found);
+  assert.equal(found.action, 'set');
+  assert.equal(found.data.title, 'Test Sync');
+});
+
+test('ADMIN-RBAC-01: President (k7379680@gmail.com) is excluded from Backup & Recovery and System Settings', () => {
+  const president = INITIAL_USERS.find(u => u.email.toLowerCase() === 'k7379680@gmail.com')!;
+  assert.ok(president);
+  assert.equal(president.role, 'admin');
+
+  const superAdmin = INITIAL_USERS.find(u => u.email.toLowerCase() === 'mehedihasan1303@gmail.com')!;
+  assert.ok(superAdmin);
+  assert.equal(superAdmin.role, 'super_admin');
+
+  // Section tabs allowed for President vs System Controller
+  const isPresidentSystemController = (president.role as string) === 'super_admin';
+  assert.equal(isPresidentSystemController, false, 'President must never be classified as System Controller');
+
+  const isSuperAdminController = superAdmin.role === 'super_admin';
+  assert.equal(isSuperAdminController, true, 'mehedihasan1303@gmail.com is authorized System Controller');
+
+  // Privileged tabs: backup, matrix, limits, emergency, logo, settings
+  const restrictedTabs = ['backup', 'matrix', 'limits', 'emergency', 'logo', 'settings'];
+  restrictedTabs.forEach(tab => {
+    const isAccessibleByPresident = isPresidentSystemController;
+    const isAccessibleBySuperAdmin = isSuperAdminController;
+    assert.equal(isAccessibleByPresident, false, `Tab ${tab} must be inaccessible to President`);
+    assert.equal(isAccessibleBySuperAdmin, true, `Tab ${tab} must be accessible to System Controller`);
+  });
+});

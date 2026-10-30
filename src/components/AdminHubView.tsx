@@ -5,6 +5,7 @@ import { ImageLightbox } from './ImageLightbox';
 import { VerifiedBadge } from './VerifiedBadge';
 import { SystemSettingsView } from './SystemSettingsView';
 import { CommunityModerationSection } from './moderation/CommunityModerationSection';
+import { DataBackupCenter } from './admin/DataBackupCenter';
 import { 
   CheckCircle2, 
   XCircle, 
@@ -36,7 +37,9 @@ import {
   Layers,
   Activity,
   UserCog,
-  Settings
+  Settings,
+  Database,
+  Cloud
 } from 'lucide-react';
 
 
@@ -73,7 +76,8 @@ export const AdminHubView: React.FC = () => {
     removeAppLogo,
     communityReports,
     adminActiveSection,
-    setAdminActiveSection
+    setAdminActiveSection,
+    cloudSyncState
   } = useApp();
 
   const activeSection = adminActiveSection;
@@ -352,46 +356,69 @@ export const AdminHubView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header Banner */}
-      <div className="bg-white border border-[#DBDBDB] rounded-2xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
+      {/* Header Banner - Modern Navy / 3D Glass Accent */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white border border-slate-800 rounded-2xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-md">
         <div>
-          <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-700 bg-purple-50 px-3 py-1 rounded-full border border-purple-200 mb-2">
-            <ShieldCheck size={14} className="text-purple-600" /> 
-            {isSystemController 
-              ? 'Authoritative Master Control Center' 
-              : isAdmin 
-              ? 'Executive Administrator Panel' 
-              : 'Community Moderation Desk'}
+          <div className="flex items-center gap-2 flex-wrap mb-2">
+            <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-300 bg-purple-900/50 px-3 py-1 rounded-full border border-purple-700/50">
+              <ShieldCheck size={14} className="text-purple-400" /> 
+              {isSystemController 
+                ? 'Authoritative System Controller Hub' 
+                : isAdmin 
+                ? 'Executive Administrator Panel' 
+                : 'Community Moderation Desk'}
+            </div>
+            <span className="text-[11px] text-slate-400 font-medium">
+              Department Of Management, Savar Govt. College
+            </span>
           </div>
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight">
+
+          <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
             {isSystemController 
-              ? 'System Control' 
+              ? 'System Control Center' 
               : isAdmin 
-              ? 'Admin Control Center' 
-              : 'Moderator Control Desk'}
+              ? 'Admin Management Hub' 
+              : 'Moderator Desk'}
           </h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-300 mt-1 max-w-xl leading-relaxed">
             {isSystemController 
-              ? 'Manage your community from one place' 
+              ? 'Constitutional governance, zero-trust RBAC limits, live Firebase RTDB sync, and full data recovery center.' 
               : isAdmin 
-              ? 'Community operations and member administration within assigned limits' 
-              : 'Review reported community content and maintain discourse standards'}
+              ? 'Executive council administration: approve members, certify donations, and maintain alumni community standards.' 
+              : 'Review reported community discourse and uphold alumni community guidelines.'}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="text-xs text-slate-600 bg-[#FAFAFA] px-3.5 py-2 rounded-xl border border-[#DBDBDB] flex items-center gap-2 shadow-xs">
+        <div className="flex flex-col sm:items-end gap-2.5">
+          <div className="text-xs text-slate-200 bg-slate-800/80 px-3.5 py-2 rounded-xl border border-slate-700 flex items-center gap-2 shadow-xs">
             <span className="text-slate-400">Identity:</span>
-            <strong className="text-slate-800">{currentUser.displayName}</strong>
+            <strong className="text-white">{currentUser.displayName}</strong>
             <VerifiedBadge user={currentUser} size="xs" />
             <span className={`font-mono text-[11px] font-bold px-2 py-0.5 rounded-full ${
               isSystemController 
-                ? 'bg-purple-100 text-purple-800 border border-purple-200' 
+                ? 'bg-purple-900/80 text-purple-200 border border-purple-700' 
                 : isAdmin 
-                ? 'bg-cyan-100 text-cyan-800 border border-cyan-200' 
-                : 'bg-amber-100 text-amber-800 border border-amber-200'
+                ? 'bg-cyan-900/80 text-cyan-200 border border-cyan-700' 
+                : 'bg-amber-900/80 text-amber-200 border border-amber-700'
             }`}>
               {isSystemController ? 'System Controller' : currentUser.role}
+            </span>
+          </div>
+
+          {/* Real Cloud Sync Status Pill */}
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-slate-800/60 border border-slate-700/80 text-[11px]">
+            <Cloud size={13} className={
+              cloudSyncState.status === 'synced' ? 'text-emerald-400' :
+              cloudSyncState.status === 'sync_pending' ? 'text-amber-400 animate-pulse' :
+              'text-slate-400'
+            } />
+            <span className="text-slate-400">Cloud Sync:</span>
+            <span className={`font-bold capitalize ${
+              cloudSyncState.status === 'synced' ? 'text-emerald-400' :
+              cloudSyncState.status === 'sync_pending' ? 'text-amber-400' :
+              'text-slate-300'
+            }`}>
+              {cloudSyncState.status.replace('_', ' ')}
             </span>
           </div>
         </div>
@@ -545,6 +572,21 @@ export const AdminHubView: React.FC = () => {
           >
             <Settings size={14} />
             <span>Settings</span>
+          </button>
+        )}
+
+        {/* Data Backup & Recovery Center (System Controller Only) */}
+        {isSystemController && (
+          <button
+            onClick={() => setActiveSection('backup')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              activeSection === 'backup' 
+                ? 'bg-purple-700 text-white shadow-xs' 
+                : 'text-slate-600 hover:text-slate-900 hover:bg-gray-100'
+            }`}
+          >
+            <Database size={14} />
+            <span>Backup & Recovery</span>
           </button>
         )}
 
@@ -1741,6 +1783,13 @@ export const AdminHubView: React.FC = () => {
       )}
 
       {/* ========================================================= */}
+      {/* SECTION: SYSTEM CONTROLLER DATA BACKUP & RECOVERY CENTER  */}
+      {/* ========================================================= */}
+      {activeSection === 'backup' && isSystemController && (
+        <DataBackupCenter />
+      )}
+
+      {/* ========================================================= */}
       {/* SECTION: SYSTEM CONTROLLER SETTINGS (FIREBASE, EMAIL, SECURITY, HEALTH) */}
       {/* ========================================================= */}
       {activeSection === 'settings' && isSystemController && (
@@ -1748,7 +1797,7 @@ export const AdminHubView: React.FC = () => {
       )}
 
       {/* Explicit Prohibited Notice if non-controller tries to access protected tab */}
-      {['matrix', 'limits', 'emergency', 'logo', 'settings'].includes(activeSection) && !isSystemController && (
+      {['matrix', 'limits', 'emergency', 'logo', 'settings', 'backup'].includes(activeSection) && !isSystemController && (
         <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-8 text-center max-w-xl mx-auto shadow-sm space-y-3">
           <ShieldAlert size={36} className="text-rose-500 mx-auto" />
           <h2 className="text-lg font-bold text-rose-950">Privilege Restricted</h2>

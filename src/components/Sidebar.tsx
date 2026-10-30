@@ -21,7 +21,8 @@ import {
   Sparkles,
   Lock,
   Layers,
-  Power
+  Power,
+  Database
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -196,6 +197,14 @@ export const Sidebar: React.FC = () => {
         icon: <Settings size={18} />,
         isActive: activeTab === 'admin' && (adminActiveSection === 'settings' || adminActiveSection === 'logo'),
         onClick: () => navigateToAdminSection('settings'),
+        group: 'settings'
+      },
+      {
+        id: 'data_backup',
+        label: 'Backup & Recovery',
+        icon: <Database size={18} />,
+        isActive: activeTab === 'admin' && adminActiveSection === 'backup',
+        onClick: () => navigateToAdminSection('backup'),
         group: 'settings'
       },
 
