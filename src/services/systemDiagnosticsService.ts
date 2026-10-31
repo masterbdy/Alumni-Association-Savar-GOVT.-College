@@ -20,13 +20,13 @@ const FIREBASE_BACKUP_STORAGE_KEY = 'nexus_firebase_config_backups_v1';
 export function getDefaultFirebaseConfig(): FirebaseEditableConfig {
   const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : ({} as Record<string, string>);
   return {
-    apiKey: env.VITE_FIREBASE_API_KEY || 'AIzaSyExampleKey123456789',
+    apiKey: env.VITE_FIREBASE_API_KEY || 'AIzaSyA3aHu9CyfRgXwY8m6O8Qj0Xi9fAWyr6xQ',
     authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || 'black-spider-football.firebaseapp.com',
     databaseUrl: env.VITE_FIREBASE_DATABASE_URL || 'https://black-spider-football-default-rtdb.firebaseio.com',
     projectId: env.VITE_FIREBASE_PROJECT_ID || 'black-spider-football',
-    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'black-spider-football.appspot.com',
-    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '88144623713',
-    appId: env.VITE_FIREBASE_APP_ID || '1:88144623713:web:example',
+    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || 'black-spider-football.firebasestorage.app',
+    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || '440464590873',
+    appId: env.VITE_FIREBASE_APP_ID || '1:440464590873:web:d95567b52425330a034288',
     lastUpdatedAt: '2026-01-01T00:00:00Z',
     lastUpdatedBy: 'usr_superadmin_bootstrap'
   };
@@ -43,6 +43,11 @@ export function getStoredFirebaseConfig(): FirebaseEditableConfig {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && typeof parsed === 'object' && parsed.projectId && parsed.databaseUrl) {
+          // Self-heal stale placeholder in localStorage override so production does not fail
+          if (parsed.apiKey && parsed.apiKey.includes('ExampleKey')) {
+            localStorage.removeItem(FIREBASE_CONFIG_STORAGE_KEY);
+            return getDefaultFirebaseConfig();
+          }
           return { ...getDefaultFirebaseConfig(), ...parsed };
         }
       }

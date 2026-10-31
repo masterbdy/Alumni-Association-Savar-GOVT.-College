@@ -1,6 +1,15 @@
 import { initializeApp, getApps, getApp, deleteApp, FirebaseApp, FirebaseOptions } from 'firebase/app';
 import { getDatabase, ref, onValue, off, Database, get } from 'firebase/database';
 import { 
+  getAuth, 
+  signInWithEmailAndPassword, 
+  sendPasswordResetEmail, 
+  signOut as firebaseSignOut, 
+  onAuthStateChanged, 
+  Auth, 
+  User as FirebaseUser 
+} from 'firebase/auth';
+import { 
   FirebaseEditableConfig, 
   FirebaseConnectionTestResult, 
   FirebaseConnectionStatus 
@@ -128,6 +137,83 @@ export async function getFirebaseDatabaseInstance(
     const errMessage = err?.message || String(err);
     safeLogs.push(`[RTDB Error] Failed to attach database instance: ${errMessage}`);
     return { db: null, safeLogs, error: errMessage };
+  }
+}
+
+/**
+ * Returns the Firebase Authentication instance.
+ */
+export async function getFirebaseAuthInstance(
+  config?: FirebaseEditableConfig
+): Promise<{ auth: Auth | null; safeLogs: string[]; error?: string }> {
+  const { app, safeLogs, error } = await getOrReinitializeFirebaseApp(config);
+  if (!app) {
+    return { auth: null, safeLogs, error: error || 'FirebaseApp initialization failed' };
+  }
+
+  try {
+    const auth = getAuth(app);
+    return { auth, safeLogs };
+  } catch (err: any) {
+    const errMessage = err?.message || String(err);
+    safeLogs.push(`[Auth Error] Failed to initialize Firebase Auth: ${errMessage}`);
+    return { auth: null, safeLogs, error: errMessage };
+  }
+}
+
+/**
+ * Signs in using Firebase Authentication.
+ */
+export async function signInWithFirebaseAuth(
+  email: string,
+  pass: string
+): Promise<{ success: boolean; user?: FirebaseUser; error?: string; errorCode?: string }> {
+  try {
+    const { auth } = await getFirebaseAuthInstance();
+    if (!auth) {
+      return { success: false, error: 'Firebase Auth is not available' };
+    }
+    const userCredential = await signInWithEmailAndPassword(auth, email.trim(), pass);
+    return { success: true, user: userCredential.user };
+  } catch (err: any) {
+    return { 
+      success: false, 
+      error: err?.message || String(err),
+      errorCode: err?.code || 'AUTH_ERROR'
+    };
+  }
+}
+
+/**
+ * Sends a native Firebase Authentication password reset email.
+ */
+export async function sendFirebaseAuthPasswordReset(
+  email: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { auth } = await getFirebaseAuthInstance();
+    if (!auth) {
+      return { success: false, error: 'Firebase Auth is not available' };
+    }
+    await sendPasswordResetEmail(auth, email.trim());
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Signs out from Firebase Authentication.
+ */
+export async function signOutFirebaseAuth(): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { auth } = await getFirebaseAuthInstance();
+    if (auth) {
+      await firebaseSignOut(auth);
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
   }
 }
 

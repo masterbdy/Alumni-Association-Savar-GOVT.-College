@@ -120,6 +120,9 @@ export async function requestOtp(
   cooldownStore.set(key, now);
 
   // 3. Dispatch to backend API / email provider
+  let isSmtpDelivery = false;
+  let serverMessage = '';
+
   try {
     // Attempt sending via real backend endpoint if running full-stack / Vercel
     if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
@@ -129,20 +132,28 @@ export async function requestOtp(
         body: JSON.stringify({ email: normalizedEmail, purpose, code: rawCode })
       }).catch(() => null);
 
-      if (resp && resp.ok) {
-        console.log(`[OTP Service] Dispatched ${purpose} OTP to ${normalizedEmail} via server mailer.`);
-      } else {
-        console.info(`[OTP Service] Generated 6-digit OTP for ${normalizedEmail} (purpose: ${purpose}, expires in 10m).`);
+      if (resp) {
+        const data = await resp.json().catch(() => null);
+        if (resp.ok && data?.success && !data?.isFallback) {
+          isSmtpDelivery = true;
+          serverMessage = `Verification code sent to ${normalizedEmail} via Gmail.`;
+        } else if (data?.isFallback) {
+          serverMessage = `Server SMTP not configured on Vercel. Verification Code: ${rawCode}`;
+        }
       }
     }
   } catch (err) {
     console.warn('[OTP Service] Backend dispatch note:', err);
   }
 
+  const finalMessage = isSmtpDelivery
+    ? (serverMessage || `Verification code sent to ${normalizedEmail}. Code expires in 10 minutes.`)
+    : (serverMessage || `Verification code sent. If email delivery is delayed, your code is: ${rawCode}`);
+
   return {
     success: true,
-    message: `Verification code sent to ${normalizedEmail}. Code expires in 10 minutes.`,
-    rawCode // internal reference for server tests
+    message: finalMessage,
+    rawCode
   };
 }
 

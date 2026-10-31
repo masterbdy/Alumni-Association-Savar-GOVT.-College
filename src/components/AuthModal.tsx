@@ -19,6 +19,7 @@ import {
   Send
 } from 'lucide-react';
 import { getCooldownRemainingSeconds } from '../services/otpService';
+import { sendFirebaseAuthPasswordReset } from '../services/firebaseService';
 
 export const AuthModal: React.FC = () => {
   const { 
@@ -132,7 +133,7 @@ export const AuthModal: React.FC = () => {
   if (!showAuthModal && isAuthenticated) return null;
 
   // Handlers
-  const handleSignIn = (e: React.FormEvent) => {
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
     setSuccessMessage('');
@@ -144,7 +145,7 @@ export const AuthModal: React.FC = () => {
       return;
     }
 
-    const res = login(email, password);
+    const res = await login(email, password);
     setLoading(false);
 
     if (!res.success) {
@@ -268,7 +269,10 @@ export const AuthModal: React.FC = () => {
     }
 
     setSendingOtp(true);
+    // Dispatch OTP verification code
     const res = await sendOtpCode(forgotEmail.trim(), 'password_reset');
+    // Also dispatch official Firebase Auth password reset email in parallel
+    sendFirebaseAuthPasswordReset(forgotEmail.trim()).catch(() => null);
     setSendingOtp(false);
 
     if (!res.success) {
