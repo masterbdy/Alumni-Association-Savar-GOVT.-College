@@ -133,7 +133,56 @@ export default async function handler(req: any, res: any) {
     return;
   }
 
-  // 5. GET /api/health
+  // 5. GET /api/firebase/probe
+  if (method === 'GET' && (pathname === '/api/firebase/probe' || pathname.endsWith('/firebase/probe'))) {
+    const urlObj = new URL(url, 'http://localhost');
+    const dbUrl = urlObj.searchParams.get('databaseUrl') || process.env.VITE_FIREBASE_DATABASE_URL || 'https://black-spider-football-default-rtdb.firebaseio.com';
+    const cleanUrl = dbUrl.trim().replace(/\/$/, '');
+    const startTime = Date.now();
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4000);
+      const resp = await fetch(`${cleanUrl}/.json?shallow=true`, {
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      const latencyMs = Date.now() - startTime;
+      const isDeactivated = resp.status === 423;
+      let deactivatedMessage = '';
+      if (isDeactivated) {
+        const body: any = await resp.json().catch(() => null);
+        deactivatedMessage = body?.error || 'Database has been deactivated.';
+      }
+
+      sendJson(res, 200, {
+        success: true,
+        httpStatus: resp.status,
+        latencyMs,
+        endpoint: cleanUrl,
+        isReachable: true,
+        isDeactivated,
+        deactivatedMessage,
+        rulesEnforced: resp.status === 401 || resp.status === 403,
+        readPermitted: resp.status === 200
+      });
+    } catch (err: any) {
+      sendJson(res, 200, {
+        success: false,
+        httpStatus: 0,
+        latencyMs: Date.now() - startTime,
+        endpoint: cleanUrl,
+        isReachable: false,
+        isDeactivated: false,
+        error: err?.message || String(err)
+      });
+    }
+    return;
+  }
+
+  // 6. GET /api/health
   if (method === 'GET' && (pathname === '/api/health' || pathname.endsWith('/health'))) {
     sendJson(res, 200, {
       status: 'ok',
@@ -142,6 +191,7 @@ export default async function handler(req: any, res: any) {
     });
     return;
   }
+
 
   // Fallback 404
   sendJson(res, 404, { error: 'API route not found' });

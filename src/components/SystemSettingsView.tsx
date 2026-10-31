@@ -30,8 +30,11 @@ import {
 import {
   subscribeToFirebaseConnectionListener,
   probeFirebaseWithInfoConnected,
-  getFirebaseConfigOrigin
+  getFirebaseConfigOrigin,
+  testAuthenticatedReadWrite
 } from '../services/firebaseService';
+import { getPendingSyncQueue } from '../services/cloudSyncService';
+
 import { 
   Database, 
   Mail, 
@@ -111,6 +114,21 @@ export const SystemSettingsView: React.FC = () => {
   const [isTestingFbConn, setIsTestingFbConn] = useState(false);
   const [showApiKeyPlain, setShowApiKeyPlain] = useState(false);
   const [showFbDiagnostics, setShowFbDiagnostics] = useState(false);
+  const [isRunningReadWriteTest, setIsRunningReadWriteTest] = useState(false);
+  const [readWriteTestResult, setReadWriteTestResult] = useState<{
+    success: boolean;
+    status: FirebaseConnectionStatus;
+    readTestPassed: boolean;
+    writeTestPassed: boolean;
+    permissionDenied: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+    latencyMs: number;
+    testRecordPath?: string;
+    cleanedUp: boolean;
+    safeLogs: string[];
+  } | null>(null);
+
 
   // ==========================================
   // Card B: Email / SMTP Configuration State
@@ -218,7 +236,45 @@ export const SystemSettingsView: React.FC = () => {
     }
   };
 
+  // Authenticated Read & Write Probe Test
+  const handleRunReadWriteTest = async () => {
+    setIsRunningReadWriteTest(true);
+    setReadWriteTestResult(null);
+    try {
+      const res = await testAuthenticatedReadWrite(
+        currentUser ? { uid: currentUser.uid, email: currentUser.email } : undefined,
+        editableFbConfig
+      );
+      setReadWriteTestResult(res);
+      if (res.status === 'database_deactivated') {
+        setFbConnTestResult(prev => prev ? {
+          ...prev,
+          status: 'database_deactivated',
+          rtdbStatus: 'deactivated',
+          isDeactivated: true,
+          message: 'Firebase Database Deactivated in Firebase Console (HTTP 423 Locked).'
+        } : null);
+      }
+    } catch (err: any) {
+      setReadWriteTestResult({
+        success: false,
+        status: 'error',
+        readTestPassed: false,
+        writeTestPassed: false,
+        permissionDenied: false,
+        errorCode: 'EXEC_ERROR',
+        errorMessage: err?.message || String(err),
+        latencyMs: 0,
+        cleanedUp: true,
+        safeLogs: [`[Error] ${err?.message || String(err)}`]
+      });
+    } finally {
+      setIsRunningReadWriteTest(false);
+    }
+  };
+
   const copyToClipboard = (text: string, keyName: string) => {
+
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text);
       setCopiedKey(keyName);
@@ -477,7 +533,7 @@ export const SystemSettingsView: React.FC = () => {
 
   const emailStatus = getEmailServiceStatus();
 
-  // Compute Firebase connection status display with all 6 authenticated/diagnostic states
+  // Compute Firebase connection status display with separate granular states
   const getFirebaseStatusBadge = () => {
     if (isTestingFbConn || fbConnTestResult?.status === 'checking') {
       return {
@@ -495,12 +551,61 @@ export const SystemSettingsView: React.FC = () => {
         statusKey: 'checking'
       };
     }
+    if (fbConnTestResult.status === 'database_deactivated') {
+      return {
+        label: 'Database Deactivated in Console (HTTP 423)',
+        color: 'text-rose-400 border-rose-500/40 bg-rose-500/10',
+        pulse: 'bg-rose-500 animate-pulse',
+        statusKey: 'database_deactivated'
+      };
+    }
     if (fbConnTestResult.status === 'connected') {
       return {
         label: `Connected (${fbConnTestResult.latencyMs}ms)`,
         color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
         pulse: 'bg-emerald-400 animate-pulse',
         statusKey: 'connected'
+      };
+    }
+    if (fbConnTestResult.status === 'read_passed') {
+      return {
+        label: 'Read Test Passed',
+        color: 'text-teal-400 border-teal-500/30 bg-teal-500/10',
+        pulse: 'bg-teal-400',
+        statusKey: 'read_passed'
+      };
+    }
+    if (fbConnTestResult.status === 'write_passed') {
+      return {
+        label: 'Write Test Passed',
+        color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+        pulse: 'bg-emerald-400 animate-pulse',
+        statusKey: 'write_passed'
+      };
+    }
+    if (fbConnTestResult.status === 'config_valid') {
+      return {
+        label: 'Configuration Valid',
+        color: 'text-blue-400 border-blue-500/30 bg-blue-500/10',
+        pulse: 'bg-blue-400',
+        statusKey: 'config_valid'
+      };
+    }
+    if (fbConnTestResult.status === 'connecting') {
+      return {
+        label: 'Connecting...',
+        color: 'text-sky-400 border-sky-500/30 bg-sky-500/10',
+        pulse: 'bg-sky-400 animate-ping',
+        statusKey: 'connecting'
+      };
+    }
+    if (fbConnTestResult.status === 'sync_pending') {
+      const count = fbConnTestResult.syncPendingCount || getPendingSyncQueue().length;
+      return {
+        label: `Sync Pending (${count} items)`,
+        color: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+        pulse: 'bg-amber-400',
+        statusKey: 'sync_pending'
       };
     }
     if (fbConnTestResult.status === 'permission_denied') {
@@ -529,7 +634,7 @@ export const SystemSettingsView: React.FC = () => {
     }
     if (fbConnTestResult.status === 'error') {
       return {
-        label: 'Configuration Error',
+        label: 'Error Encountered',
         color: 'text-rose-400 border-rose-500/30 bg-rose-500/10',
         pulse: 'bg-rose-500',
         statusKey: 'error'
@@ -812,16 +917,19 @@ export const SystemSettingsView: React.FC = () => {
                 </div>
 
                 {/* Live Real-Time Connection Diagnostic Banner */}
-                <div className={`p-4 rounded-2xl border text-xs space-y-2 transition-all ${
-                  fbConnTestResult?.status === 'connected'
+                {/* Live Real-Time Connection Diagnostic Banner */}
+                <div className={`p-4 rounded-2xl border text-xs space-y-2.5 transition-all ${
+                  fbConnTestResult?.status === 'connected' || fbConnTestResult?.status === 'read_passed' || fbConnTestResult?.status === 'write_passed'
                     ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-500/40 text-emerald-900 dark:text-emerald-200'
+                    : fbConnTestResult?.status === 'database_deactivated'
+                    ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-400 dark:border-rose-500 text-rose-900 dark:text-rose-100 shadow-xs'
                     : fbConnTestResult?.status === 'permission_denied'
                     ? 'bg-indigo-50 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200'
                     : fbConnTestResult?.status === 'configuration_error' || fbConnTestResult?.status === 'error'
                     ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-500/40 text-rose-900 dark:text-rose-200'
                     : fbConnTestResult?.status === 'network_error'
                     ? 'bg-red-50 dark:bg-red-950/30 border-red-300 dark:border-red-500/40 text-red-900 dark:text-red-200'
-                    : fbConnTestResult?.status === 'checking'
+                    : fbConnTestResult?.status === 'checking' || fbConnTestResult?.status === 'connecting'
                     ? 'bg-sky-50 dark:bg-sky-950/30 border-sky-300 dark:border-sky-500/40 text-sky-900 dark:text-sky-200'
                     : 'bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-500/40 text-amber-900 dark:text-amber-200'
                 }`}>
@@ -851,7 +959,7 @@ export const SystemSettingsView: React.FC = () => {
                   </p>
 
                   {fbConnTestResult?.details && (
-                    <div className="text-[10px] font-mono opacity-85 pt-0.5">
+                    <div className="text-[10px] font-mono opacity-85 pt-0.5 bg-black/5 dark:bg-white/5 p-2 rounded-lg">
                       {fbConnTestResult.details}
                     </div>
                   )}
@@ -873,11 +981,127 @@ export const SystemSettingsView: React.FC = () => {
                           {fbConnTestResult.safeLogs.map((logLine: string, idx: number) => (
                             <div key={idx} className="leading-tight">
                               <span className="text-slate-500 select-none mr-2">{idx + 1}.</span>
-                              <span className={logLine.includes('Error') ? 'text-rose-400 font-bold' : logLine.includes('Connected') || logLine.includes('TRUE') ? 'text-emerald-400' : 'text-slate-300'}>
+                              <span className={logLine.includes('Error') || logLine.includes('Locked') || logLine.includes('Deactivated') ? 'text-rose-400 font-bold' : logLine.includes('Connected') || logLine.includes('TRUE') || logLine.includes('passed') ? 'text-emerald-400' : 'text-slate-300'}>
                                 {logLine}
                               </span>
                             </div>
                           ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Firebase Realtime Database Diagnostics Matrix (7 Separate States) */}
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Activity size={14} className="text-purple-500" />
+                      <span>Firebase Realtime Database Diagnostics Matrix</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        disabled={isTestingFbConn}
+                        onClick={() => handleProbeFirebaseConnection()}
+                        className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw size={11} className={isTestingFbConn ? 'animate-spin' : ''} />
+                        <span>Re-Probe Socket</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isRunningReadWriteTest}
+                        onClick={handleRunReadWriteTest}
+                        className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-purple-600 hover:bg-purple-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <CheckCircle2 size={11} className={isRunningReadWriteTest ? 'animate-spin' : ''} />
+                        <span>{isRunningReadWriteTest ? 'Testing...' : 'Test Read/Write (Safe Probe)'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                    {/* 1. Configuration Syntax */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">1. Config Syntax</span>
+                      <span className={`font-bold flex items-center gap-1 text-[11px] ${fbConnTestResult?.isConfigValid !== false ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {fbConnTestResult?.isConfigValid !== false ? '✓ VALID' : '✗ SYNTAX ERROR'}
+                      </span>
+                    </div>
+
+                    {/* 2. Endpoint Reachability */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">2. Host Reachable</span>
+                      <span className={`font-bold flex items-center gap-1 text-[11px] ${fbConnTestResult?.isEndpointReachable ? 'text-emerald-500' : fbConnTestResult?.status === 'network_error' ? 'text-rose-500' : 'text-sky-500'}`}>
+                        {fbConnTestResult?.isEndpointReachable ? `✓ ONLINE` : 'PROBING...'}
+                      </span>
+                    </div>
+
+                    {/* 3. Console Database State */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">3. Console DB State</span>
+                      <span className={`font-bold flex items-center gap-1 text-[11px] ${fbConnTestResult?.isDeactivated ? 'text-rose-500 font-bold' : fbConnTestResult?.status === 'connected' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {fbConnTestResult?.isDeactivated ? '⚠ DEACTIVATED (423)' : fbConnTestResult?.status === 'connected' ? '✓ ACTIVE' : 'PENDING'}
+                      </span>
+                    </div>
+
+                    {/* 4. Socket Handshake */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">4. Socket Handshake</span>
+                      <span className={`font-bold flex items-center gap-1 text-[11px] ${fbConnTestResult?.status === 'connected' ? 'text-emerald-500' : 'text-amber-500'}`}>
+                        {fbConnTestResult?.status === 'connected' ? '✓ CONNECTED' : 'DISCONNECTED'}
+                      </span>
+                    </div>
+
+                    {/* 5. Read Test */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">5. Read Test (/app_logo)</span>
+                      <span className={`font-bold flex items-center gap-1 text-[11px] ${readWriteTestResult?.readTestPassed || fbConnTestResult?.readTestPassed ? 'text-emerald-500' : fbConnTestResult?.isDeactivated ? 'text-rose-500' : 'text-slate-400'}`}>
+                        {readWriteTestResult?.readTestPassed || fbConnTestResult?.readTestPassed ? '✓ PASSED' : fbConnTestResult?.isDeactivated ? '✗ BLOCKED (423)' : 'UNTESTED'}
+                      </span>
+                    </div>
+
+                    {/* 6. Write Test */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">6. Write Test & Clean</span>
+                      <span className={`font-bold flex items-center gap-1 text-[11px] ${readWriteTestResult?.writeTestPassed ? 'text-emerald-500' : readWriteTestResult?.permissionDenied ? 'text-indigo-400' : fbConnTestResult?.isDeactivated ? 'text-rose-500' : 'text-slate-400'}`}>
+                        {readWriteTestResult?.writeTestPassed ? '✓ VERIFIED & CLEANED' : readWriteTestResult?.permissionDenied ? '🔒 PERMISSION_DENIED' : fbConnTestResult?.isDeactivated ? '✗ BLOCKED (423)' : 'UNTESTED'}
+                      </span>
+                    </div>
+
+                    {/* 7. Offline Sync Queue */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700/80 col-span-2 space-y-1">
+                      <span className="text-slate-500 text-[10px] block">7. Cross-Device Sync Queue</span>
+                      <span className="font-bold flex items-center gap-1 text-[11px] text-slate-700 dark:text-slate-300">
+                        {getPendingSyncQueue().length === 0 ? (
+                          <span className="text-emerald-500">✓ All local records synchronized (Queue: 0)</span>
+                        ) : (
+                          <span className="text-amber-500">⚠ {getPendingSyncQueue().length} pending writes cached safely offline</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Live Read/Write Probe Feedback Banner */}
+                  {readWriteTestResult && (
+                    <div className={`p-3 rounded-xl border text-xs space-y-1 ${
+                      readWriteTestResult.success
+                        ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-500/40 text-emerald-900 dark:text-emerald-200'
+                        : readWriteTestResult.status === 'database_deactivated'
+                        ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-500/40 text-rose-900 dark:text-rose-200'
+                        : 'bg-indigo-50 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-500/40 text-indigo-900 dark:text-indigo-200'
+                    }`}>
+                      <div className="font-bold flex items-center justify-between">
+                        <span>Read/Write Diagnostic Probe Result:</span>
+                        <span className="font-mono text-[10px]">({readWriteTestResult.latencyMs}ms)</span>
+                      </div>
+                      <p className="text-[11px]">
+                        {readWriteTestResult.errorMessage || (readWriteTestResult.success ? 'Read & Write probe succeeded. Temporary diagnostic record was written, read back for verification, and deleted cleanly.' : 'Probe completed with restrictions.')}
+                      </p>
+                      {readWriteTestResult.testRecordPath && (
+                        <div className="text-[10px] font-mono opacity-80">
+                          Target Path: {readWriteTestResult.testRecordPath} (Cleanup: {readWriteTestResult.cleanedUp ? 'Verified Deleted' : 'Pending'})
                         </div>
                       )}
                     </div>
@@ -895,6 +1119,7 @@ export const SystemSettingsView: React.FC = () => {
                   </p>
                 </div>
               </div>
+
 
               {/* Validation Feedback Messages */}
               {fbValidationMessage && (

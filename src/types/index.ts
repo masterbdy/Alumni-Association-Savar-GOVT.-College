@@ -598,16 +598,22 @@ export interface SmtpConfigSavePayload {
 
 export type FirebaseConnectionStatus = 
   | 'checking'
+  | 'config_valid'
+  | 'connecting'
   | 'connected'
-  | 'disconnected'
+  | 'read_passed'
+  | 'write_passed'
+  | 'sync_pending'
   | 'permission_denied'
-  | 'configuration_error'
   | 'network_error'
+  | 'configuration_error'
+  | 'database_deactivated'
+  | 'disconnected'
   | 'error';
 
 export interface FirebaseConnectionTestResult {
   status: FirebaseConnectionStatus;
-  rtdbStatus: 'reachable' | 'protected' | 'unreachable';
+  rtdbStatus: 'reachable' | 'protected' | 'deactivated' | 'unreachable';
   authStatus: 'reachable' | 'unreachable';
   latencyMs: number;
   message: string;
@@ -617,6 +623,17 @@ export interface FirebaseConnectionTestResult {
   configOrigin?: 'vercel_env' | 'local_storage_override' | 'fallback_template';
   safeLogs?: string[];
   safeLog?: string[];
+  // Granular diagnostic flags
+  isConfigValid?: boolean;
+  isEndpointReachable?: boolean;
+  isDeactivated?: boolean;
+  readTestPassed?: boolean;
+  writeTestPassed?: boolean;
+  permissionDenied?: boolean;
+  errorCode?: string;
+  httpStatus?: number;
+  syncPendingCount?: number;
 }
 
 export type EmailServiceStatus = 'configured' | 'connected' | 'error' | 'not_configured';
+

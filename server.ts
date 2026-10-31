@@ -113,6 +113,53 @@ app.post('/api/auth/send-otp', async (req: Request, res: Response) => {
   }
 });
 
+// 5. Firebase RTDB Endpoint Diagnostic Probe
+app.get('/api/firebase/probe', async (req: Request, res: Response) => {
+  const dbUrl = (req.query.databaseUrl as string) || process.env.VITE_FIREBASE_DATABASE_URL || 'https://black-spider-football-default-rtdb.firebaseio.com';
+  const cleanUrl = dbUrl.trim().replace(/\/$/, '');
+  const startTime = Date.now();
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const resp = await fetch(`${cleanUrl}/.json?shallow=true`, {
+      headers: { 'Accept': 'application/json' },
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+
+    const latencyMs = Date.now() - startTime;
+    const isDeactivated = resp.status === 423;
+    let deactivatedMessage = '';
+    if (isDeactivated) {
+      const body: any = await resp.json().catch(() => null);
+      deactivatedMessage = body?.error || 'Database has been deactivated.';
+    }
+
+    res.json({
+      success: true,
+      httpStatus: resp.status,
+      latencyMs,
+      endpoint: cleanUrl,
+      isReachable: true,
+      isDeactivated,
+      deactivatedMessage,
+      rulesEnforced: resp.status === 401 || resp.status === 403,
+      readPermitted: resp.status === 200
+    });
+  } catch (err: any) {
+    res.json({
+      success: false,
+      httpStatus: 0,
+      latencyMs: Date.now() - startTime,
+      endpoint: cleanUrl,
+      isReachable: false,
+      isDeactivated: false,
+      error: err?.message || String(err)
+    });
+  }
+});
+
 // Health check endpoint
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
@@ -121,6 +168,7 @@ app.get('/api/health', (req: Request, res: Response) => {
     smtpConfigured: getPublicSmtpConfig().isPasswordConfigured
   });
 });
+
 
 // ==========================================
 // Vite Dev Server / Static File Serving

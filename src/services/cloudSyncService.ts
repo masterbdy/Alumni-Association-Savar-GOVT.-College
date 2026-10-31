@@ -63,7 +63,9 @@ export function enqueueCloudSync(path: string, data: any, action: 'set' | 'updat
  * Runs an authentic write-and-read test on Firebase Realtime Database.
  * Accurately confirms whether cloud storage is accessible and whether rules permit operations.
  */
-export async function testDatabaseWriteRead(): Promise<{
+export async function testDatabaseWriteRead(
+  userSession?: { uid: string; email: string }
+): Promise<{
   success: boolean;
   status: CloudSyncStatus;
   latencyMs: number;
@@ -86,15 +88,38 @@ export async function testDatabaseWriteRead(): Promise<{
   }
 
   const endpoint = db.app.options.databaseURL || 'Unknown';
+
+  // Fast check for HTTP 423 Deactivated status
+  try {
+    const resp = await fetch(`${endpoint.replace(/\/$/, '')}/.json?shallow=true`, { method: 'GET' });
+    if (resp.status === 423) {
+      const data: any = await resp.json().catch(() => null);
+      const errMsg = data?.error || 'Database has been deactivated.';
+      return {
+        success: false,
+        status: 'sync_failed',
+        latencyMs: Math.round(performance.now() - startTime),
+        message: `Database Deactivated in Firebase Console: ${errMsg}`,
+        error: errMsg,
+        errorCode: 'DATABASE_DEACTIVATED',
+        endpoint
+      };
+    }
+  } catch {}
+
   const testId = `probe_${Date.now()}`;
-  const testPath = `__sync_probes__/${testId}`;
+  // Use authorized user path if session active; unauthenticated fallback to root
+  const testPath = userSession?.uid 
+    ? `users/${userSession.uid}/__sync_probe__/${testId}`
+    : `__sync_probes__/${testId}`;
 
   try {
     const probeRef = ref(db, testPath);
     const testPayload = {
       ping: 'ok',
       timestamp: new Date().toISOString(),
-      clientPlatform: 'Alumni Association Web'
+      clientPlatform: 'Alumni Association Web',
+      tester: userSession?.email || 'Anonymous'
     };
 
     // 1. Write Probe
@@ -105,7 +130,7 @@ export async function testDatabaseWriteRead(): Promise<{
     const latencyMs = Math.round(performance.now() - startTime);
 
     if (snapshot.exists() && snapshot.val()?.ping === 'ok') {
-      // Clean up probe record
+      // Clean up probe record immediately
       try {
         await set(probeRef, null);
       } catch {}
@@ -114,7 +139,7 @@ export async function testDatabaseWriteRead(): Promise<{
         success: true,
         status: 'synced',
         latencyMs,
-        message: `Cloud write and read verified successfully (${latencyMs}ms).`,
+        message: `Cloud write and readback verified successfully (${latencyMs}ms). Probe cleaned up.`,
         endpoint
       };
     } else {
@@ -136,7 +161,7 @@ export async function testDatabaseWriteRead(): Promise<{
         success: false,
         status: 'sync_failed',
         latencyMs,
-        message: 'Database Security Rules Active: Unauthenticated write to RTDB rejected by database.rules.json (Permission Denied). Local changes are safely stored.',
+        message: 'Database Security Rules Active: Write to RTDB rejected by database.rules.json (Permission Denied). Local changes are safely queued.',
         error: errMsg,
         errorCode: 'PERMISSION_DENIED',
         endpoint

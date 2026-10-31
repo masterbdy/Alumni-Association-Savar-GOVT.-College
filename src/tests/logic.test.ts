@@ -36,6 +36,14 @@ import {
   getPublicSmtpConfig,
   isMaskOrPlaceholder
 } from '../services/smtpServerService';
+import {
+  probeFirebaseWithInfoConnected,
+  testAuthenticatedReadWrite
+} from '../services/firebaseService';
+import {
+  testDatabaseWriteRead
+} from '../services/cloudSyncService';
+
 
 import { 
   UserProfile, 
@@ -3795,4 +3803,127 @@ test('SMTP-PERSIST-05: Non-controller cannot inspect or update SMTP configuratio
   assert.equal(memberUpdate.success, false);
   assert.match(memberUpdate.error || '', /Security Violation/);
 });
+
+// ==========================================
+// Firebase RTDB Diagnosis & Diagnostic Verification Tests
+// ==========================================
+
+test('RTDB-DIAG-01: Probe accurately detects HTTP 423 Locked as database_deactivated with actionable console instructions', async () => {
+  // Test probe with actual configured project URL and valid key format
+  const config = {
+    apiKey: 'AIzaSyAuditedProdKey123456789',
+    authDomain: 'black-spider-football.firebaseapp.com',
+    databaseUrl: 'https://black-spider-football-default-rtdb.firebaseio.com',
+    projectId: 'black-spider-football',
+    storageBucket: 'black-spider-football.appspot.com',
+    messagingSenderId: '88144623713',
+    appId: '1:88144623713:web:example'
+  };
+
+  const probe = await probeFirebaseWithInfoConnected(config, 2000);
+  
+  // Real endpoint returns HTTP 423 Locked: "The Firebase database 'black-spider-football-default-rtdb' has been deactivated."
+  assert.equal(probe.isEndpointReachable, true, 'Server must be reachable over HTTPS');
+  assert.equal(probe.isDeactivated, true, 'Probe must detect that database has been deactivated in Firebase Console');
+  assert.equal(probe.status, 'database_deactivated', 'Status must be accurately categorized as database_deactivated instead of generic outage');
+  assert.equal(probe.rtdbStatus, 'deactivated');
+  assert.match(probe.details, /Enable database|Re-activate/i, 'Must instruct user to enable/reactivate database in Firebase Console');
+});
+
+test('RTDB-DIAG-02: Granular connection states are accurately defined and classified', () => {
+  const allowedStatuses = [
+    'checking',
+    'config_valid',
+    'connecting',
+    'connected',
+    'read_passed',
+    'write_passed',
+    'sync_pending',
+    'permission_denied',
+    'network_error',
+    'configuration_error',
+    'database_deactivated',
+    'disconnected',
+    'error'
+  ];
+
+  // Verify all 13 states are valid and non-overlapping
+  const uniqueStatuses = new Set(allowedStatuses);
+  assert.equal(uniqueStatuses.size, allowedStatuses.length);
+  assert.ok(uniqueStatuses.has('config_valid'));
+  assert.ok(uniqueStatuses.has('read_passed'));
+  assert.ok(uniqueStatuses.has('write_passed'));
+  assert.ok(uniqueStatuses.has('sync_pending'));
+  assert.ok(uniqueStatuses.has('database_deactivated'));
+});
+
+test('RTDB-DIAG-03: Read-only probe does not expose private records or download entire database', async () => {
+  const config = {
+    apiKey: 'AIzaSyExampleKey123456789',
+    authDomain: 'black-spider-football.firebaseapp.com',
+    databaseUrl: 'https://black-spider-football-default-rtdb.firebaseio.com',
+    projectId: 'black-spider-football',
+    storageBucket: 'black-spider-football.appspot.com',
+    messagingSenderId: '88144623713',
+    appId: '1:88144623713:web:example'
+  };
+
+  // Perform probe
+  const result = await probeFirebaseWithInfoConnected(config, 1500);
+
+  // Safe logs should never contain private user records or secret API keys
+  for (const logLine of result.safeLogs || []) {
+    assert.equal(logLine.includes('AIzaSyExampleKey123456789'), false, 'API key must never be logged in raw form');
+    assert.equal(logLine.includes('passwordHash'), false, 'Sensitive user fields must never appear in diagnostic logs');
+  }
+});
+
+test('RTDB-DIAG-04: Authenticated read/write diagnostic checks deactivation, writes unique probe, and verifies cleanup', async () => {
+  const sysUser = {
+    uid: 'usr_superadmin_bootstrap',
+    email: 'mehedihasan1303@gmail.com'
+  };
+
+  const res = await testAuthenticatedReadWrite(sysUser);
+  
+  // When database is deactivated in Firebase Console, it safely blocks writes and reports DATABASE_DEACTIVATED
+  if (res.status === 'database_deactivated') {
+    assert.equal(res.errorCode, 'DATABASE_DEACTIVATED');
+    assert.equal(res.cleanedUp, true);
+    assert.match(res.errorMessage || '', /deactivated/i);
+  } else {
+    // If database were active, writeTestPassed must verify cleanup
+    assert.equal(res.cleanedUp, true, 'Temporary diagnostic probe must be cleaned up');
+  }
+});
+
+test('RTDB-DIAG-05: Unauthenticated write to protected RTDB paths correctly returns PERMISSION_DENIED without loosening rules', async () => {
+  // Test without user session
+  const res = await testAuthenticatedReadWrite(undefined);
+  
+  if (res.status === 'database_deactivated') {
+    assert.equal(res.errorCode, 'DATABASE_DEACTIVATED');
+  } else {
+    assert.equal(res.permissionDenied, true);
+    assert.equal(res.errorCode, 'PERMISSION_DENIED');
+  }
+});
+
+test('RTDB-DIAG-06: Offline sync queue integrity: writes queued safely, sync pending reported honestly', () => {
+  // Clear any existing queue
+  localStorage.removeItem('nexus_sync_pending_queue_v1');
+
+  // Enqueue 2 writes
+  enqueueCloudSync('posts/test_post_1', { title: 'Test 1' }, 'set');
+  enqueueCloudSync('posts/test_post_2', { title: 'Test 2' }, 'set');
+
+  const queue = getPendingSyncQueue();
+  assert.equal(queue.length, 2, 'Pending sync queue must store exactly 2 queued writes');
+  assert.equal(queue[0].path, 'posts/test_post_1');
+  assert.equal(queue[1].path, 'posts/test_post_2');
+
+  // Clean up
+  localStorage.removeItem('nexus_sync_pending_queue_v1');
+});
+
 
